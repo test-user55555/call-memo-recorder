@@ -93,7 +93,7 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
@@ -106,6 +106,9 @@ dependencies {
 
     // Navigation
     implementation(libs.navigation.compose)
+
+    // Material Icons Extended (Mic, Cloud, Stop, Info, List, Settings, Warning etc.)
+    implementation("androidx.compose.material:material-icons-extended")
 
     // Room完全除去 - SQLiteOpenHelper手動実装に変更
     // (kapt不要でメモリ節約)

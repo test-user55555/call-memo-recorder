@@ -58,7 +58,7 @@ fun SetupScreen(
                     text = "このアプリは通話前後または通話中に、あなた自身の声をマイクで録音します。",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                HorizontalDivider()
+                Divider()
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
                     Spacer(Modifier.width(8.dp))
