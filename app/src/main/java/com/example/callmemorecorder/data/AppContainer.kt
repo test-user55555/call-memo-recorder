@@ -8,6 +8,7 @@ import com.example.callmemorecorder.data.local.AppDatabase
 import com.example.callmemorecorder.data.local.RecordDao
 import com.example.callmemorecorder.data.remote.TranscriptionApiService
 import com.example.callmemorecorder.data.repository.DriveRepository
+import com.example.callmemorecorder.data.repository.FtpsRepository
 import com.example.callmemorecorder.data.repository.RecordRepository
 import com.example.callmemorecorder.data.repository.TranscriptionRepository
 import okhttp3.OkHttpClient
@@ -23,7 +24,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
  * Manual Dependency Injection container.
  * Uses SQLiteOpenHelper instead of Room to avoid kapt/annotation processing.
  */
-class AppContainer(private val context: Context) {
+class AppContainer(val context: Context) {
 
     // SQLiteOpenHelper-based Database (no kapt needed)
     val database: AppDatabase by lazy {
@@ -72,6 +73,7 @@ class AppContainer(private val context: Context) {
     // Repositories
     val recordRepository: RecordRepository by lazy { RecordRepository(recordDao) }
     val driveRepository: DriveRepository by lazy { DriveRepository(context) }
+    val ftpsRepository: FtpsRepository by lazy { FtpsRepository() }
     val transcriptionRepository: TranscriptionRepository by lazy {
         TranscriptionRepository(transcriptionApiService)
     }

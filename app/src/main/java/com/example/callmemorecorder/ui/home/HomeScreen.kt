@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.callmemorecorder.service.CallRecordingService
 import com.example.callmemorecorder.service.RecordingState
 import com.example.callmemorecorder.util.formatDuration
 import com.google.accompanist.permissions.ExperimentalPermissionsApi

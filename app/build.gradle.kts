@@ -30,17 +30,11 @@ android {
             "\"${localProperties.getProperty("BACKEND_BASE_URL", "https://your-backend.example.com")}\"")
         buildConfigField("String", "DRIVE_FOLDER_NAME",
             "\"${localProperties.getProperty("DRIVE_FOLDER_NAME", "CallMemoRecorder")}\"")
-        buildConfigField("boolean", "DRIVE_ENABLED",
-            "${localProperties.getProperty("DRIVE_ENABLED", "false")}")
+        buildConfigField("boolean", "DRIVE_ENABLED", "true")
         buildConfigField("boolean", "TRANSCRIPTION_ENABLED",
             "${localProperties.getProperty("TRANSCRIPTION_ENABLED", "false")}")
-        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID",
-            "\"${localProperties.getProperty("GOOGLE_WEB_CLIENT_ID", "")}\"")
         buildConfigField("boolean", "RELEASE_SIGNING_ENABLED",
-            "${localProperties.getProperty("RELEASE_SIGNING_ENABLED", "false")}")
-
-        manifestPlaceholders["GOOGLE_WEB_CLIENT_ID"] =
-            localProperties.getProperty("GOOGLE_WEB_CLIENT_ID", "")
+            "${localProperties.getProperty("RELEASE_SIGNING_ENABLED", "false")}") 
     }
 
     buildTypes {
@@ -110,8 +104,20 @@ dependencies {
     // Material Icons Extended (Mic, Cloud, Stop, Info, List, Settings, Warning etc.)
     implementation("androidx.compose.material:material-icons-extended")
 
-    // Room完全除去 - SQLiteOpenHelper手動実装に変更
-    // (kapt不要でメモリ節約)
+    // Google Sign-In (Drive連携用)
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
+
+    // Google Drive REST API
+    implementation("com.google.api-client:google-api-client-android:2.2.0") {
+        exclude(group = "org.apache.httpcomponents")
+    }
+    implementation("com.google.apis:google-api-services-drive:v3-rev20231128-2.0.0") {
+        exclude(group = "org.apache.httpcomponents")
+    }
+    implementation("com.google.http-client:google-http-client-gson:1.43.3")
+
+    // FTPS (Apache Commons Net)
+    implementation("commons-net:commons-net:3.10.0")
 
     // Retrofit + OkHttp
     implementation(libs.retrofit)

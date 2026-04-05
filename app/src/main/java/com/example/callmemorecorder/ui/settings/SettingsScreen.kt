@@ -1,20 +1,28 @@
 package com.example.callmemorecorder.ui.settings
 
+import android.app.Activity
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.callmemorecorder.BuildConfig
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.common.api.ApiException
 
 @Composable
 fun SettingsScreen(
@@ -22,6 +30,24 @@ fun SettingsScreen(
     viewModel: SettingsViewModel
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val ftpsTestResult by viewModel.ftpsTestResult.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+
+    // Google Sign-In ランチャー
+    val signInLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            try {
+                val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+                task.getResult(ApiException::class.java)
+                viewModel.onGoogleSignInSuccess()
+                Toast.makeText(context, "Google アカウントに接続しました", Toast.LENGTH_SHORT).show()
+            } catch (e: ApiException) {
+                Toast.makeText(context, "サインイン失敗: ${e.statusCode}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -29,115 +55,284 @@ fun SettingsScreen(
                 title = { Text("設定") },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.Filled.ArrowBack, contentDescription = "戻る")
                     }
                 }
             )
         }
-    ) { paddingValues ->
+    ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
+                .padding(padding)
                 .padding(16.dp)
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Google Drive section
-            SettingsSection(title = "Google Drive") {
-                StatusRow(
-                    title = "接続状態",
-                    value = if (settings.isDriveConnected) "接続済み" else "未接続",
-                    isError = !settings.isDriveConnected
+
+            // ── 通話自動録音 ─────────────────────────────────
+            SectionCard(title = "通話自動録音") {
+                SwitchRow(
+                    title = "通話を自動で録音する",
+                    description = "通話開始時に自動録音、終了時に自動停止します",
+                    checked = settings.autoRecordCall,
+                    onCheckedChange = { viewModel.setAutoRecordCall(it) }
                 )
-                if (!settings.isDriveEnabled) {
-                    InfoRow(
-                        text = "Google Drive連携は未設定です。local.propertiesでDRIVE_ENABLED=trueに設定してください。",
+                if (settings.autoRecordCall) {
+                    InfoBox(
+                        text = "⚠️ 自分の声のみ録音されます（OSの制約により通話相手の声は録音できません）",
                         isWarning = true
                     )
                 }
-                LabeledSwitchRow(
-                    title = "自動アップロード",
-                    description = "録音完了後に自動でアップロード",
+            }
+
+            // ── アップロード先 ────────────────────────────────
+            SectionCard(title = "自動アップロード") {
+                SwitchRow(
+                    title = "録音後に自動アップロード",
+                    description = "録音完了後、選択した宛先にアップロードします",
                     checked = settings.autoUpload,
-                    enabled = settings.isDriveEnabled,
                     onCheckedChange = { viewModel.setAutoUpload(it) }
                 )
-                StatusRow(
-                    title = "保存フォルダ名",
-                    value = settings.driveFolderName
-                )
-            }
-
-            // Transcription section
-            SettingsSection(title = "文字起こし") {
-                if (!settings.isTranscriptionEnabled) {
-                    InfoRow(
-                        text = "文字起こしは未設定です。TRANSCRIPTION_ENABLED=trueおよびBACKEND_BASE_URLを設定してください。",
-                        isWarning = true
+                if (settings.autoUpload) {
+                    Spacer(Modifier.height(8.dp))
+                    Text("アップロード先", style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    UploadTypeSelector(
+                        selected = settings.uploadType,
+                        onSelect  = { viewModel.setUploadType(it) }
                     )
                 }
-                LabeledSwitchRow(
-                    title = "自動文字起こし",
-                    description = "アップロード後に自動で文字起こし",
-                    checked = settings.autoTranscribe,
-                    enabled = settings.isTranscriptionEnabled,
-                    onCheckedChange = { viewModel.setAutoTranscribe(it) }
-                )
             }
 
-            // Storage section
-            SettingsSection(title = "ストレージ") {
-                LabeledSwitchRow(
-                    title = "アップロード後に削除",
-                    description = "Drive保存後にローカルファイルを削除",
+            // ── Google Drive 設定 ─────────────────────────────
+            if (settings.autoUpload && settings.uploadType == "drive") {
+                SectionCard(title = "Google Drive 設定") {
+                    if (settings.isDriveSignedIn) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Filled.CheckCircle, contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text("接続済み", fontWeight = FontWeight.Bold)
+                                Text(settings.driveEmail ?: "", style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Spacer(Modifier.weight(1f))
+                            OutlinedButton(onClick = { viewModel.signOutGoogle() }) {
+                                Text("切断")
+                            }
+                        }
+                    } else {
+                        Button(
+                            onClick = { signInLauncher.launch(viewModel.getGoogleSignInIntent()) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Filled.AccountCircle, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Google アカウントで接続")
+                        }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    LabeledTextField(
+                        label = "アップロード先フォルダ名",
+                        value = settings.driveFolderName,
+                        placeholder = "例: CallMemoRecorder",
+                        onValueChange = { viewModel.setDriveFolderName(it) }
+                    )
+                    Text(
+                        "Googleドライブのルートにこの名前のフォルダが作成されます",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // ── FTPS 設定 ─────────────────────────────────────
+            if (settings.autoUpload && settings.uploadType == "ftps") {
+                SectionCard(title = "FTPS 設定") {
+                    FtpsSettingsForm(
+                        settings = settings,
+                        viewModel = viewModel,
+                        ftpsTestResult = ftpsTestResult
+                    )
+                }
+            }
+
+            // ── ストレージ ────────────────────────────────────
+            SectionCard(title = "ストレージ") {
+                SwitchRow(
+                    title = "アップロード後にローカルファイルを削除",
+                    description = "Drive/FTPSへの保存後、端末の録音ファイルを削除します",
                     checked = settings.deleteAfterUpload,
                     onCheckedChange = { viewModel.setDeleteAfterUpload(it) }
                 )
             }
 
-            // Experimental features section
-            SettingsSection(title = "実験的機能") {
-                InfoRow(
-                    text = "実験的機能は動作が不安定な場合があります。通話相手の音声録音はOSの制約により保証されません。",
-                    isWarning = true
-                )
-                LabeledSwitchRow(
-                    title = "実験的機能を有効化",
-                    description = "双方向録音などの実験機能 (動作非保証)",
-                    checked = settings.experimentalFeatures,
-                    onCheckedChange = { viewModel.setExperimentalFeatures(it) }
-                )
-            }
-
-            // App info section
-            SettingsSection(title = "アプリ情報") {
-                StatusRow(title = "バージョン", value = "1.0.0 (debug)")
-                StatusRow(
-                    title = "バックエンドURL",
-                    value = if (BuildConfig.TRANSCRIPTION_ENABLED) settings.backendBaseUrl else "未設定"
-                )
-                StatusRow(
-                    title = "ビルドタイプ",
-                    value = if (BuildConfig.DEBUG) "DEBUG" else "RELEASE"
-                )
+            // ── アプリ情報 ────────────────────────────────────
+            SectionCard(title = "アプリ情報") {
+                InfoRow(label = "バージョン", value = "1.1.0")
+                InfoRow(label = "ビルドタイプ", value = "DEBUG")
             }
         }
     }
 }
 
+// ── アップロード先セレクター ────────────────────────────────────
 @Composable
-private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+private fun UploadTypeSelector(selected: String, onSelect: (String) -> Unit) {
+    val options = listOf(
+        Triple("drive", "Google Drive", Icons.Filled.Cloud),
+        Triple("ftps",  "FTPS サーバー", Icons.Filled.Storage),
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEach { (key, label, icon) ->
+            OutlinedCard(
+                onClick = { onSelect(key) },
+                modifier = Modifier.fillMaxWidth(),
+                border = if (selected == key)
+                    CardDefaults.outlinedCardBorder().copy(
+                        width = 2.dp
+                    )
+                else CardDefaults.outlinedCardBorder()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(
+                        selected = selected == key,
+                        onClick = { onSelect(key) }
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(label, fontWeight = FontWeight.Medium)
+                }
+            }
+        }
+    }
+}
+
+// ── FTPS設定フォーム ────────────────────────────────────────────
+@Composable
+private fun FtpsSettingsForm(
+    settings: SettingsState,
+    viewModel: SettingsViewModel,
+    ftpsTestResult: String?
+) {
+    var showPassword by remember { mutableStateOf(false) }
+
+    // ローカルの編集用状態
+    var host by remember(settings.ftpsHost) { mutableStateOf(settings.ftpsHost) }
+    var port by remember(settings.ftpsPort) { mutableStateOf(settings.ftpsPort.toString()) }
+    var user by remember(settings.ftpsUsername) { mutableStateOf(settings.ftpsUsername) }
+    var pass by remember(settings.ftpsPassword) { mutableStateOf(settings.ftpsPassword) }
+    var path by remember(settings.ftpsPath) { mutableStateOf(settings.ftpsPath) }
+
+    LabeledTextField(
+        label = "ホスト名 / IPアドレス",
+        value = host,
+        placeholder = "例: ftp.example.com",
+        onValueChange = { host = it; viewModel.setFtpsHost(it) }
+    )
+    LabeledTextField(
+        label = "ポート番号",
+        value = port,
+        placeholder = "21",
+        keyboardType = KeyboardType.Number,
+        onValueChange = {
+            port = it
+            it.toIntOrNull()?.let { p -> viewModel.setFtpsPort(p) }
+        }
+    )
+    LabeledTextField(
+        label = "ユーザー名",
+        value = user,
+        placeholder = "ftpuser",
+        onValueChange = { user = it; viewModel.setFtpsUsername(it) }
+    )
+
+    // パスワードフィールド
+    OutlinedTextField(
+        value = pass,
+        onValueChange = { pass = it; viewModel.setFtpsPassword(it) },
+        label = { Text("パスワード") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = {
+            IconButton(onClick = { showPassword = !showPassword }) {
+                Icon(
+                    if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                    contentDescription = if (showPassword) "隠す" else "表示"
+                )
+            }
+        }
+    )
+
+    LabeledTextField(
+        label = "アップロード先パス",
+        value = path,
+        placeholder = "例: /recordings",
+        onValueChange = { path = it; viewModel.setFtpsPath(it) }
+    )
+
+    Spacer(Modifier.height(8.dp))
+
+    // 接続テストボタン
+    Button(
+        onClick = {
+            val p = port.toIntOrNull() ?: 21
+            viewModel.testFtpsConnection(host, p, user, pass, path)
+        },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = host.isNotBlank() && user.isNotBlank() && pass.isNotBlank()
+    ) {
+        Icon(Icons.Filled.NetworkCheck, contentDescription = null)
+        Spacer(Modifier.width(8.dp))
+        Text("接続テスト")
+    }
+
+    // テスト結果
+    ftpsTestResult?.let { result ->
+        Spacer(Modifier.height(4.dp))
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = if (result.startsWith("✅"))
+                    MaterialTheme.colorScheme.primaryContainer
+                else
+                    MaterialTheme.colorScheme.errorContainer
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = result,
+                modifier = Modifier.padding(12.dp),
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+    }
+}
+
+// ── 共通コンポーザブル ─────────────────────────────────────────
+
+@Composable
+private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
     Column {
         Text(
-            text = title,
+            title,
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.primary,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 8.dp)
+            modifier = Modifier.padding(bottom = 6.dp)
         )
         Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(8.dp)) {
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 content()
             }
         }
@@ -145,7 +340,7 @@ private fun SettingsSection(title: String, content: @Composable ColumnScope.() -
 }
 
 @Composable
-private fun LabeledSwitchRow(
+private fun SwitchRow(
     title: String,
     description: String,
     checked: Boolean,
@@ -153,9 +348,7 @@ private fun LabeledSwitchRow(
     onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(8.dp),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -164,57 +357,42 @@ private fun LabeledSwitchRow(
             Text(
                 description,
                 style = MaterialTheme.typography.bodySmall,
-                color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant
-                else MaterialTheme.colorScheme.outline
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            enabled = enabled
-        )
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
 }
 
 @Composable
-private fun StatusRow(
-    title: String,
+private fun LabeledTextField(
+    label: String,
     value: String,
-    isError: Boolean = false
+    placeholder: String = "",
+    keyboardType: KeyboardType = KeyboardType.Text,
+    onValueChange: (String) -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(title, fontWeight = FontWeight.Medium)
-        Text(
-            value,
-            style = MaterialTheme.typography.bodyMedium,
-            color = if (isError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
-        )
-    }
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        label = { Text(label) },
+        placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.outline) },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = keyboardType)
+    )
 }
 
 @Composable
-private fun InfoRow(text: String, isWarning: Boolean = false) {
+private fun InfoBox(text: String, isWarning: Boolean = false) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = if (isWarning)
-                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
-            else
-                MaterialTheme.colorScheme.surfaceVariant
-        )
+            containerColor = if (isWarning) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                             else MaterialTheme.colorScheme.surfaceVariant
+        ),
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier = Modifier.padding(8.dp),
-            verticalAlignment = Alignment.Top
-        ) {
+        Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.Top) {
             Icon(
                 if (isWarning) Icons.Filled.Warning else Icons.Filled.Info,
                 contentDescription = null,
@@ -222,12 +400,18 @@ private fun InfoRow(text: String, isWarning: Boolean = false) {
                 tint = if (isWarning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
             )
             Spacer(Modifier.width(8.dp))
-            Text(
-                text = text,
-                style = MaterialTheme.typography.bodySmall,
-                color = if (isWarning) MaterialTheme.colorScheme.onErrorContainer
-                else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text(text, style = MaterialTheme.typography.bodySmall)
         }
+    }
+}
+
+@Composable
+private fun InfoRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, fontWeight = FontWeight.Medium)
+        Text(value, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

@@ -11,7 +11,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkManager
-import com.example.callmemorecorder.BuildConfig
 import com.example.callmemorecorder.data.AppContainer
 import com.example.callmemorecorder.data.repository.DriveRepository
 import com.example.callmemorecorder.data.repository.RecordRepository
@@ -19,13 +18,17 @@ import com.example.callmemorecorder.domain.model.*
 import com.example.callmemorecorder.service.RecordingService
 import com.example.callmemorecorder.service.RecordingState
 import com.example.callmemorecorder.worker.UploadWorker
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.UUID
 
 class HomeViewModel(
     private val context: Context,
+    private val container: AppContainer,
     private val recordRepository: RecordRepository,
     private val driveRepository: DriveRepository,
     private val workManager: WorkManager
@@ -39,6 +42,7 @@ class HomeViewModel(
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 return HomeViewModel(
                     context = context.applicationContext,
+                    container = container,
                     recordRepository = container.recordRepository,
                     driveRepository = container.driveRepository,
                     workManager = WorkManager.getInstance(context)
@@ -141,7 +145,11 @@ class HomeViewModel(
                     updatedAt = System.currentTimeMillis()
                 )
                 recordRepository.insertRecord(record)
-                if (BuildConfig.DRIVE_ENABLED && driveRepository.isSignedIn()) {
+                // DataStore から自動アップロード設定を確認
+                val prefs = container.dataStore.data.first()
+                val uploadType = prefs[stringPreferencesKey("upload_type")] ?: "none"
+                val autoUpload = prefs[booleanPreferencesKey("auto_upload")] ?: false
+                if (autoUpload && uploadType != "none") {
                     val req = UploadWorker.buildWorkRequest(record.id, filePath, fileName)
                     workManager.enqueue(req)
                 }
