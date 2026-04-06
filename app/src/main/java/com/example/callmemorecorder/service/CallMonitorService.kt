@@ -1,25 +1,43 @@
 package com.example.callmemorecorder.service
 
+import android.annotation.SuppressLint
 import android.app.*
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
 import android.provider.ContactsContract
 import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
 import android.telephony.TelephonyManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.work.WorkManager
+import com.example.callmemorecorder.CallMemoApp
 import com.example.callmemorecorder.MainActivity
+import com.example.callmemorecorder.domain.model.*
+import com.example.callmemorecorder.worker.UploadWorker
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
+import java.util.concurrent.Executors
 
 /**
- * 常駐フォアグラウンドサービス。
- * TelephonyManager で通話状態を監視し、
- * 通話開始 / 終了時に CallRecordingService に転送する。
+ * 通話監視 + 自動録音 を一体化したフォアグラウンドサービス。
  *
- * START_STICKY により OS に強制終了されても再起動。
- * 通知バーに「通話監視中」を常時表示することで
- * Android のバックグラウンド制限を回避する。
+ * ■ 設計方針
+ *   - foregroundServiceType = "microphone" のみ使用
+ *     (phoneCall は Android 14+ で MANAGE_OWN_CALLS/CALL_COMPANION_APP が必要なためクラッシュする)
+ *   - API 31+ は TelephonyCallback、それ未満は PhoneStateListener(deprecated) を使用
+ *   - RecordingService/CallRecordingService への依存を排除し MediaRecorder を直接管理
+ *   - START_STICKY で OS 強制終了後も自動再起動
  */
 class CallMonitorService : Service() {
 
@@ -28,32 +46,57 @@ class CallMonitorService : Service() {
         const val NOTIFICATION_ID = 3001
         const val CHANNEL_ID = "call_monitor_channel"
 
-        // Intent extra keys
-        const val EXTRA_PHONE_NUMBER = "extra_phone_number"
-        const val EXTRA_CALLER_NAME  = "extra_caller_name"
-        const val EXTRA_DIRECTION    = "extra_direction"   // "INCOMING" / "OUTGOING"
+        private const val SAMPLE_RATE = 44100
+        private const val BIT_RATE = 128000
 
         fun startIntent(ctx: Context) = Intent(ctx, CallMonitorService::class.java)
-        fun stopIntent(ctx: Context)  = Intent(ctx, CallMonitorService::class.java).apply {
+        fun stopIntent(ctx: Context) = Intent(ctx, CallMonitorService::class.java).apply {
             action = "STOP"
         }
     }
 
+    // ── Telephony ──────────────────────────────────────────────
     private lateinit var telephonyManager: TelephonyManager
+
+    // API 31+ 用
+    private var telephonyCallback: TelephonyCallback? = null
+    // API 30 以下用
+    @Suppress("DEPRECATION")
     private var phoneStateListener: PhoneStateListener? = null
+
     private var prevState = TelephonyManager.CALL_STATE_IDLE
 
-    // 通話情報（状態遷移をまたいで保持）
+    // ── 通話情報 ─────────────────────────────────────────────
     private var currentPhoneNumber: String? = null
     private var currentCallerName: String? = null
-    private var callDirection: String = "UNKNOWN"   // "INCOMING" / "OUTGOING"
+    private var callDirection: String = "UNKNOWN"
+
+    // ── 録音 ─────────────────────────────────────────────────
+    private var mediaRecorder: MediaRecorder? = null
+    private var currentOutputFile: File? = null
+    private var recordingStartTime: Long = 0L
+
+    @Volatile private var isRecording = false
+
+    // ── コルーチン ────────────────────────────────────────────
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val container get() = (application as CallMemoApp).container
+
+    // ── ライフサイクル ────────────────────────────────────────
 
     override fun onCreate() {
         super.onCreate()
+        // 最優先: onCreate で即座にフォアグラウンド通知を表示（5秒ルール対応）
         createNotificationChannel()
-        startForeground(NOTIFICATION_ID, buildNotification())
-        startPhoneStateListener()
-        Log.i(TAG, "CallMonitorService started")
+        startForeground(NOTIFICATION_ID, buildMonitorNotification())
+        Log.i(TAG, "CallMonitorService onCreate (API ${Build.VERSION.SDK_INT})")
+        // READ_PHONE_STATE 権限チェック後にリスナー登録
+        if (hasPhoneStatePermission()) {
+            startTelephonyListener()
+        } else {
+            Log.w(TAG, "READ_PHONE_STATE permission not granted – stopping service")
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -62,63 +105,120 @@ class CallMonitorService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
+        // 二重起動時も通知を再表示（ForegroundServiceDidNotStartInTimeException 対策）
+        startForeground(NOTIFICATION_ID, buildMonitorNotification())
         return START_STICKY
     }
 
-    @Suppress("DEPRECATION")
-    private fun startPhoneStateListener() {
-        telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
-        phoneStateListener = object : PhoneStateListener() {
-            override fun onCallStateChanged(state: Int, phoneNumber: String?) {
-                Log.d(TAG, "onCallStateChanged: $prevState -> $state, number=$phoneNumber")
-                // phoneNumber は RINGING 時のみ非 null になる端末が多い
-                if (!phoneNumber.isNullOrEmpty()) {
-                    currentPhoneNumber = phoneNumber
-                    currentCallerName = resolveContactName(phoneNumber)
-                }
-                handleStateTransition(prevState, state)
-                prevState = state
-            }
-        }
-        @Suppress("DEPRECATION")
-        telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_CALL_STATE)
+    override fun onDestroy() {
+        stopTelephonyListener()
+        if (isRecording) runBlocking { stopRecording() }
+        serviceScope.cancel()
+        Log.i(TAG, "CallMonitorService destroyed")
+        super.onDestroy()
     }
 
-    private fun handleStateTransition(prev: Int, current: Int) {
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    // ── 権限チェック ──────────────────────────────────────────
+
+    private fun hasPhoneStatePermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_PHONE_STATE) ==
+                PackageManager.PERMISSION_GRANTED
+
+    // ── 通話状態リスナー設定 ──────────────────────────────────
+
+    @SuppressLint("MissingPermission")
+    private fun startTelephonyListener() {
+        telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            // API 31+ : TelephonyCallback
+            val cb = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                override fun onCallStateChanged(state: Int) {
+                    Log.d(TAG, "TelephonyCallback.onCallStateChanged: $prevState -> $state")
+                    handleStateTransition(prevState, state, null)
+                    prevState = state
+                }
+            }
+            telephonyCallback = cb
+            telephonyManager.registerTelephonyCallback(
+                Executors.newSingleThreadExecutor(), cb
+            )
+            // 現在の状態を初期値として取得
+            try {
+                prevState = telephonyManager.callState
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not get initial call state: ${e.message}")
+            }
+        } else {
+            // API 29-30 : PhoneStateListener (deprecated だが利用可能)
+            @Suppress("DEPRECATION")
+            val listener = object : PhoneStateListener() {
+                @Deprecated("Deprecated in Java")
+                override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                    Log.d(TAG, "PhoneStateListener.onCallStateChanged: $prevState -> $state, num=$phoneNumber")
+                    handleStateTransition(prevState, state, phoneNumber)
+                    prevState = state
+                }
+            }
+            phoneStateListener = listener
+            @Suppress("DEPRECATION")
+            telephonyManager.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
+        }
+        Log.i(TAG, "Telephony listener registered")
+    }
+
+    private fun stopTelephonyListener() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            telephonyCallback?.let {
+                try { telephonyManager.unregisterTelephonyCallback(it) } catch (e: Exception) {}
+            }
+            telephonyCallback = null
+        } else {
+            @Suppress("DEPRECATION")
+            phoneStateListener?.let {
+                try {
+                    @Suppress("DEPRECATION")
+                    telephonyManager.listen(it, PhoneStateListener.LISTEN_NONE)
+                } catch (e: Exception) {}
+            }
+            phoneStateListener = null
+        }
+    }
+
+    // ── 通話状態遷移ハンドラ ──────────────────────────────────
+
+    private fun handleStateTransition(prev: Int, current: Int, phoneNumber: String?) {
+        // 番号は RINGING 時に渡される端末が多い
+        if (!phoneNumber.isNullOrEmpty()) {
+            currentPhoneNumber = phoneNumber
+            currentCallerName = resolveContactName(phoneNumber)
+        }
+
         when {
-            // 着信中 (IDLE → RINGING)
+            // 着信検知 (IDLE → RINGING)
             current == TelephonyManager.CALL_STATE_RINGING &&
                     prev == TelephonyManager.CALL_STATE_IDLE -> {
                 callDirection = "INCOMING"
                 Log.i(TAG, "Incoming call from $currentPhoneNumber")
             }
+
             // 通話開始 (RINGING or IDLE → OFFHOOK)
             current == TelephonyManager.CALL_STATE_OFFHOOK &&
                     prev != TelephonyManager.CALL_STATE_OFFHOOK -> {
                 if (prev == TelephonyManager.CALL_STATE_IDLE) {
-                    callDirection = "OUTGOING"   // 直接 OFFHOOK = 発信
+                    callDirection = "OUTGOING"
                 }
                 Log.i(TAG, "Call started: dir=$callDirection, num=$currentPhoneNumber")
-                val serviceIntent = Intent(this, CallRecordingService::class.java).apply {
-                    action = TelephonyManager.EXTRA_STATE_OFFHOOK
-                    putExtra(EXTRA_PHONE_NUMBER, currentPhoneNumber)
-                    putExtra(EXTRA_CALLER_NAME, currentCallerName)
-                    putExtra(EXTRA_DIRECTION, callDirection)
-                }
-                startCallRecordingService(serviceIntent)
+                onCallStarted()
             }
+
             // 通話終了 (OFFHOOK → IDLE)
             current == TelephonyManager.CALL_STATE_IDLE &&
                     prev == TelephonyManager.CALL_STATE_OFFHOOK -> {
                 Log.i(TAG, "Call ended: dir=$callDirection, num=$currentPhoneNumber")
-                val serviceIntent = Intent(this, CallRecordingService::class.java).apply {
-                    action = TelephonyManager.EXTRA_STATE_IDLE
-                    putExtra(EXTRA_PHONE_NUMBER, currentPhoneNumber)
-                    putExtra(EXTRA_CALLER_NAME, currentCallerName)
-                    putExtra(EXTRA_DIRECTION, callDirection)
-                }
-                startCallRecordingService(serviceIntent)
-                // 通話情報リセット
+                onCallEnded()
                 currentPhoneNumber = null
                 currentCallerName = null
                 callDirection = "UNKNOWN"
@@ -126,23 +226,216 @@ class CallMonitorService : Service() {
         }
     }
 
-    private fun startCallRecordingService(intent: Intent) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
+    // ── 通話開始 ─────────────────────────────────────────────
+
+    private fun onCallStarted() {
+        if (isRecording) return
+        // 通知を「録音中」に更新
+        updateNotification("通話録音中...")
+        // 少し遅延してから録音開始（通話確立を待つ）
+        serviceScope.launch {
+            delay(800)
+            startRecording()
         }
     }
 
-    /** 電話番号から連絡先名を取得 */
+    // ── 通話終了 ─────────────────────────────────────────────
+
+    private fun onCallEnded() {
+        serviceScope.launch {
+            val result = stopRecording()
+            updateNotification("通話を監視中")
+            if (result != null) {
+                saveAndUpload(
+                    filePath = result.filePath,
+                    durationMs = result.durationMs,
+                    number = currentPhoneNumber,
+                    name = currentCallerName,
+                    direction = callDirection
+                )
+            }
+        }
+    }
+
+    // ── 録音制御 ─────────────────────────────────────────────
+
+    @Synchronized
+    private fun startRecording() {
+        if (isRecording) return
+        if (!hasRecordAudioPermission()) {
+            Log.w(TAG, "RECORD_AUDIO permission not granted")
+            return
+        }
+        try {
+            val outputFile = createOutputFile()
+            currentOutputFile = outputFile
+
+            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                MediaRecorder(this)
+            } else {
+                @Suppress("DEPRECATION")
+                MediaRecorder()
+            }
+            recorder.apply {
+                setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioSamplingRate(SAMPLE_RATE)
+                setAudioEncodingBitRate(BIT_RATE)
+                setOutputFile(outputFile.absolutePath)
+                prepare()
+                start()
+            }
+            mediaRecorder = recorder
+            recordingStartTime = System.currentTimeMillis()
+            isRecording = true
+            Log.i(TAG, "Recording started: ${outputFile.absolutePath}")
+        } catch (e: Exception) {
+            Log.e(TAG, "startRecording failed (VOICE_COMMUNICATION)", e)
+            // VOICE_COMMUNICATION 失敗時は MIC で再試行
+            retryWithMicSource()
+        }
+    }
+
+    private fun retryWithMicSource() {
+        try {
+            val outputFile = createOutputFile()
+            currentOutputFile = outputFile
+            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                MediaRecorder(this)
+            } else {
+                @Suppress("DEPRECATION")
+                MediaRecorder()
+            }
+            recorder.apply {
+                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
+                setAudioSamplingRate(SAMPLE_RATE)
+                setAudioEncodingBitRate(BIT_RATE)
+                setOutputFile(outputFile.absolutePath)
+                prepare()
+                start()
+            }
+            mediaRecorder = recorder
+            recordingStartTime = System.currentTimeMillis()
+            isRecording = true
+            Log.i(TAG, "Recording started (MIC fallback): ${outputFile.absolutePath}")
+        } catch (e2: Exception) {
+            Log.e(TAG, "retryWithMicSource also failed", e2)
+            isRecording = false
+            currentOutputFile = null
+        }
+    }
+
+    /** @return RecordingResult? – null なら録音していなかった or 短すぎた */
+    @Synchronized
+    private fun stopRecording(): RecordingResult? {
+        if (!isRecording) return null
+        isRecording = false
+        val durationMs = System.currentTimeMillis() - recordingStartTime
+        val filePath = currentOutputFile?.absolutePath
+        currentOutputFile = null
+        return try {
+            mediaRecorder?.apply { stop(); reset(); release() }
+            mediaRecorder = null
+            if (filePath != null && File(filePath).exists() && durationMs > 1000) {
+                Log.i(TAG, "Recording saved: $filePath (${durationMs}ms)")
+                RecordingResult.Success(filePath, durationMs)
+            } else {
+                Log.w(TAG, "Recording too short or file missing: ${durationMs}ms, path=$filePath")
+                filePath?.let { File(it).delete() }
+                null
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "stopRecording error", e)
+            try { mediaRecorder?.release() } catch (_: Exception) {}
+            mediaRecorder = null
+            null
+        }
+    }
+
+    private fun hasRecordAudioPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+
+    // ── DB 保存 & アップロード ────────────────────────────────
+
+    private suspend fun saveAndUpload(
+        filePath: String,
+        durationMs: Long,
+        number: String?,
+        name: String?,
+        direction: String
+    ) {
+        try {
+            val dateStr = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date())
+            val dirLabel = when (direction) {
+                "INCOMING" -> "着信"; "OUTGOING" -> "発信"; else -> "通話"
+            }
+            val displayName = name ?: number ?: "不明"
+            val title = "${dirLabel}_${displayName}_${dateStr}"
+
+            val record = RecordItem(
+                id = UUID.randomUUID().toString(),
+                title = title,
+                createdAt = System.currentTimeMillis(),
+                durationMs = durationMs,
+                localPath = filePath,
+                mimeType = "audio/mp4",
+                status = RecordingStatus.SAVED,
+                uploadStatus = UploadStatus.NOT_STARTED,
+                transcriptionStatus = TranscriptionStatus.NOT_STARTED,
+                driveFileId = null, driveWebLink = null,
+                transcriptText = null, errorMessage = null,
+                updatedAt = System.currentTimeMillis(),
+                callerNumber = number,
+                callerName = name,
+                callDirection = runCatching { CallDirection.valueOf(direction) }
+                    .getOrDefault(CallDirection.UNKNOWN)
+            )
+            container.recordRepository.insertRecord(record)
+            Log.i(TAG, "Record saved: ${record.id}")
+
+            val prefs = container.dataStore.data.first()
+            val uploadType = prefs[stringPreferencesKey("upload_type")] ?: "none"
+            val autoUpload = prefs[booleanPreferencesKey("auto_upload")] ?: false
+            if (autoUpload && uploadType != "none") {
+                WorkManager.getInstance(applicationContext)
+                    .enqueue(UploadWorker.buildWorkRequest(record.id, filePath, File(filePath).name))
+                Log.i(TAG, "Upload queued for ${record.id}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "saveAndUpload error", e)
+        }
+    }
+
+    // ── ファイル ──────────────────────────────────────────────
+
+    private fun createOutputFile(): File {
+        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val dir = File(filesDir, "recordings").also { it.mkdirs() }
+        return File(dir, "call_$timestamp.m4a")
+    }
+
+    // ── 連絡先解決 ─────────────────────────────────────────────
+
     private fun resolveContactName(phoneNumber: String): String? {
+        val hasContactsPerm = ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.READ_CONTACTS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!hasContactsPerm) return null
+
         return try {
             val uri = android.net.Uri.withAppendedPath(
                 ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
                 android.net.Uri.encode(phoneNumber)
             )
-            contentResolver.query(uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
-                null, null, null)?.use { cursor ->
+            contentResolver.query(
+                uri,
+                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null, null, null
+            )?.use { cursor ->
                 if (cursor.moveToFirst())
                     cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
                 else null
@@ -153,42 +446,43 @@ class CallMonitorService : Service() {
         }
     }
 
-    override fun onDestroy() {
-        @Suppress("DEPRECATION")
-        telephonyManager.listen(phoneStateListener, PhoneStateListener.LISTEN_NONE)
-        phoneStateListener = null
-        Log.i(TAG, "CallMonitorService destroyed")
-        super.onDestroy()
-    }
-
-    override fun onBind(intent: Intent?): IBinder? = null
+    // ── 通知 ─────────────────────────────────────────────────
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val ch = NotificationChannel(
-                CHANNEL_ID, "通話監視",
+            NotificationChannel(
+                CHANNEL_ID, "通話監視・自動録音",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "通話を検知して自動録音するために常駐しています"
+                description = "通話を検知して自動録音します"
                 setShowBadge(false)
+                enableVibration(false)
+                setSound(null, null)
+            }.also {
+                getSystemService(NotificationManager::class.java).createNotificationChannel(it)
             }
-            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
         }
     }
 
-    private fun buildNotification(): Notification {
+    private fun buildMonitorNotification(text: String = "通話を監視中 — 着信/発信を自動録音します"): Notification {
         val pi = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Call Memo Recorder")
-            .setContentText("通話を監視中 — 着信を自動録音します")
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pi)
             .setOngoing(true)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
+    }
+
+    private fun updateNotification(text: String) {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.notify(NOTIFICATION_ID, buildMonitorNotification(text))
     }
 }

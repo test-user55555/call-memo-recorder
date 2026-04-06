@@ -3,6 +3,7 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
     // kapt完全除去 - Room手動実装に変更
 }
 
@@ -15,14 +16,14 @@ if (localPropertiesFile.exists()) {
 
 android {
     namespace = "com.example.callmemorecorder"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.callmemorecorder"
         minSdk = 29
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        targetSdk = 36
+        versionCode = 3
+        versionName = "1.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -69,9 +70,7 @@ android {
         buildConfig = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.13"
-    }
+    // Kotlin 2.0+ uses compose compiler gradle plugin, no need to set kotlinCompilerExtensionVersion here
 
     packagingOptions {
         resources {

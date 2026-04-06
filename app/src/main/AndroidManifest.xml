@@ -8,7 +8,6 @@
     <!-- フォアグラウンドサービス -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
 
     <!-- ネットワーク -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -43,7 +42,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.CallMemoRecorder"
-        tools:targetApi="31">
+        tools:targetApi="36">
 
         <!-- メインActivity -->
         <activity
@@ -72,14 +71,16 @@
             android:foregroundServiceType="microphone" />
 
         <!--
-            常駐監視サービス: TelephonyManager で通話状態をポーリング。
-            通知バーに常時表示して Android のバックグラウンド制限を回避。
+            常駐監視サービス: TelephonyManager で通話状態を監視し録音も行う。
+            foregroundServiceType="microphone" のみ使用。
+            phoneCall タイプは Android 14+ で MANAGE_OWN_CALLS 権限が必要なため使用しない。
             START_STICKY により OS に強制停止されても自動再起動。
         -->
         <service
             android:name=".service.CallMonitorService"
             android:exported="false"
-            android:foregroundServiceType="phoneCall" />
+            android:foregroundServiceType="microphone"
+            android:stopWithTask="false" />
 
         <!--
             通話状態 BroadcastReceiver。

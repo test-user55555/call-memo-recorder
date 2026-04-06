@@ -194,6 +194,28 @@ class HistoryViewModel(
         }
     }
 
+    /** 複数レコードを一括削除する */
+    fun deleteRecords(ids: Set<String>) {
+        viewModelScope.launch {
+            var successCount = 0
+            var errorCount = 0
+            for (id in ids) {
+                try {
+                    recordRepository.deleteById(id)
+                    successCount++
+                } catch (e: Exception) {
+                    Log.e(TAG, "deleteRecords error for $id", e)
+                    errorCount++
+                }
+            }
+            _deleteResult.value = if (errorCount == 0) {
+                "deleted_bulk:$successCount"
+            } else {
+                "error:$errorCount"
+            }
+        }
+    }
+
     fun clearDeleteResult() { _deleteResult.value = null }
 
     override fun onCleared() {

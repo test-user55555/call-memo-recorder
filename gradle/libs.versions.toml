@@ -1,20 +1,20 @@
 [versions]
-agp = "8.1.4"
-kotlin = "1.9.23"
-coreKtx = "1.12.0"
+agp = "8.7.3"
+kotlin = "2.0.21"
+coreKtx = "1.13.1"
 junit = "4.13.2"
-junitVersion = "1.1.5"
-espressoCore = "3.5.1"
+junitVersion = "1.2.1"
+espressoCore = "3.6.1"
 lifecycleRuntimeKtx = "2.8.7"
 activityCompose = "1.9.3"
-composeBom = "2024.05.00"
+composeBom = "2025.04.00"
 retrofit = "2.9.0"
-okhttp = "4.11.0"
-workManager = "2.9.1"
+okhttp = "4.12.0"
+workManager = "2.10.0"
 navigationCompose = "2.8.9"
-coroutines = "1.7.3"
-datastorePreferences = "1.0.0"
-accompanistPermissions = "0.32.0"
+coroutines = "1.8.1"
+datastorePreferences = "1.1.1"
+accompanistPermissions = "0.36.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -45,3 +45,4 @@ accompanist-permissions = { group = "com.google.accompanist", name = "accompanis
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

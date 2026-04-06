@@ -1,11 +1,7 @@
 package com.example.callmemorecorder.ui.setup
 
 import android.Manifest
-import android.app.Activity
 import android.os.Build
-import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -15,16 +11,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.callmemorecorder.ui.settings.SettingsViewModel
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
-import com.google.android.gms.auth.api.signin.GoogleSignIn
-import com.google.android.gms.common.api.ApiException
 
 @OptIn(ExperimentalPermissionsApi::class)
 @Composable
@@ -32,9 +24,7 @@ fun SetupScreen(
     onSetupComplete: () -> Unit,
     viewModel: SettingsViewModel
 ) {
-    val context = LocalContext.current
     var agreed = remember { mutableStateOf(false) }
-    val settings by viewModel.settings.collectAsStateWithLifecycle()
 
     // 各権限の状態
     val micPermission = rememberPermissionState(android.Manifest.permission.RECORD_AUDIO)
@@ -42,22 +32,6 @@ fun SetupScreen(
     val notificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         rememberPermissionState(Manifest.permission.POST_NOTIFICATIONS)
     } else null
-
-    // Google サインイン ランチャー
-    val signInLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK) {
-            try {
-                val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
-                task.getResult(ApiException::class.java)
-                viewModel.onGoogleSignInSuccess()
-                Toast.makeText(context, "Google アカウントに接続しました", Toast.LENGTH_SHORT).show()
-            } catch (e: ApiException) {
-                Toast.makeText(context, "サインイン失敗: ${e.statusCode}", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
 
     // 必須権限（マイク）が許可されているか
     val canProceed = agreed.value && micPermission.status.isGranted
@@ -83,7 +57,10 @@ fun SetupScreen(
 
         // ── アプリ説明 ────────────────────────────────────
         Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Mic, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(8.dp))
@@ -122,12 +99,11 @@ fun SetupScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-
                 HorizontalDivider()
 
                 // マイク権限（必須）
                 PermissionRow(
-                    title = "マイク権限 ★必須",
+                    title = "マイク権限",
                     description = "音声録音に必要です",
                     isGranted = micPermission.status.isGranted,
                     isRequired = true,
@@ -156,75 +132,29 @@ fun SetupScreen(
             }
         }
 
-        // ── Google Drive 連携 ──────────────────────────────
+        // ── Drive は後で設定 ──────────────────────────────
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
-                containerColor = if (settings.isDriveSignedIn)
-                    MaterialTheme.colorScheme.primaryContainer
-                else
-                    MaterialTheme.colorScheme.surfaceVariant
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
             )
         ) {
-            Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            Row(
+                modifier = Modifier.padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Filled.Cloud,
-                        contentDescription = null,
-                        tint = if (settings.isDriveSignedIn)
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text("Google Drive 連携", fontWeight = FontWeight.Bold)
-                    if (settings.isDriveSignedIn) {
-                        Spacer(Modifier.width(8.dp))
-                        Icon(
-                            Icons.Filled.CheckCircle,
-                            contentDescription = "接続済み",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                }
-
-                if (settings.isDriveSignedIn) {
-                    Text(
-                        text = "✅ 接続済み: ${settings.driveEmail ?: ""}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Text(
-                        text = "録音ファイルを自動的に Google Drive にアップロードできます。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                    OutlinedButton(
-                        onClick = { viewModel.signOutGoogle() },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("アカウントを切断")
-                    }
-                } else {
-                    Text(
-                        text = "Google Drive に接続すると、録音ファイルを自動的にアップロードできます。\nスキップして後で設定することもできます。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Button(
-                        onClick = { signInLauncher.launch(viewModel.getGoogleSignInIntent()) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.AccountCircle, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Google アカウントで接続")
-                    }
-                }
+                Icon(
+                    Icons.Filled.Settings,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = "Google Drive 連携・FTPS 設定はセットアップ完了後、歯車アイコンから設定できます。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
 
@@ -261,7 +191,7 @@ fun SetupScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "マイク権限が必要です。「権限の確認」から「マイク権限 ★必須」を許可してください。",
+                        "マイク権限が必要です。「権限の確認」から「マイク権限」を許可してください。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )
@@ -314,10 +244,10 @@ private fun PermissionRow(
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(title, fontWeight = FontWeight.Medium)
-                if (!isGranted && isRequired) {
+                if (isRequired && !isGranted) {
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        "（必須）",
+                        "★必須",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.error
                     )
