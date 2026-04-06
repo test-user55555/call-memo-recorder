@@ -33,6 +33,11 @@ class CallRecordingService : Service() {
         const val NOTIFICATION_ID = 2001
         const val CHANNEL_ID = "call_recording_channel"
 
+        // Intent extras (CallMonitorService と同一キー)
+        const val EXTRA_PHONE_NUMBER = "extra_phone_number"
+        const val EXTRA_CALLER_NAME  = "extra_caller_name"
+        const val EXTRA_DIRECTION    = "extra_direction"
+
         @Volatile var isRecording = false
     }
 
@@ -69,9 +74,9 @@ class CallRecordingService : Service() {
         val state = intent?.action ?: return START_NOT_STICKY
 
         // 通話情報を取得（CallMonitorService から渡される）
-        phoneNumber = intent.getStringExtra(CallMonitorService.EXTRA_PHONE_NUMBER)
-        callerName  = intent.getStringExtra(CallMonitorService.EXTRA_CALLER_NAME)
-        direction   = intent.getStringExtra(CallMonitorService.EXTRA_DIRECTION) ?: "UNKNOWN"
+        phoneNumber = intent.getStringExtra(EXTRA_PHONE_NUMBER)
+        callerName  = intent.getStringExtra(EXTRA_CALLER_NAME)
+        direction   = intent.getStringExtra(EXTRA_DIRECTION) ?: "UNKNOWN"
 
         Log.d(TAG, "Phone state: $state, num=$phoneNumber, name=$callerName, dir=$direction")
         when (state) {

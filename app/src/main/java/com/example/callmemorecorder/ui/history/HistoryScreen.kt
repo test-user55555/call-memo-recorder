@@ -35,7 +35,7 @@ fun HistoryScreen(
 
     // 選択モード状態
     var isSelectionMode by remember { mutableStateOf(false) }
-    val selectedIds = remember { mutableStateSetOf<String>() }
+    val selectedIds: androidx.compose.runtime.snapshots.SnapshotStateSet<String> = remember { mutableStateSetOf() }
 
     // 確認ダイアログ
     var showDeleteConfirm by remember { mutableStateOf(false) }

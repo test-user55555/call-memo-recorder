@@ -245,7 +245,7 @@ class CallMonitorService : Service() {
         serviceScope.launch {
             val result = stopRecording()
             updateNotification("通話を監視中")
-            if (result != null) {
+            if (result is RecordingResult.Success) {
                 saveAndUpload(
                     filePath = result.filePath,
                     durationMs = result.durationMs,
