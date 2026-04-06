@@ -8,6 +8,7 @@
     <!-- フォアグラウンドサービス -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
 
     <!-- ネットワーク -->
     <uses-permission android:name="android.permission.INTERNET" />
@@ -22,7 +23,7 @@
     <!-- ウェイクロック (バックグラウンド録音) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- 起動時に自動的にレシーバーを有効化 -->
+    <!-- 端末起動時にサービスを自動起動 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <uses-feature
@@ -52,24 +53,53 @@
             </intent-filter>
         </activity>
 
-        <!-- 録音フォアグラウンドサービス (手動録音) -->
+        <!-- 手動録音フォアグラウンドサービス -->
         <service
             android:name=".service.RecordingService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
-        <!-- 通話連動録音サービス (自動録音) -->
+        <!--
+            通話連動録音サービス: 録音本体。
+            CallMonitorService / CallStateReceiver から呼ばれる。
+        -->
         <service
             android:name=".service.CallRecordingService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
-        <!-- 通話状態レシーバー -->
+        <!--
+            常駐監視サービス: TelephonyManager で通話状態をポーリング。
+            通知バーに常時表示して Android のバックグラウンド制限を回避。
+            START_STICKY により OS に強制停止されても自動再起動。
+        -->
+        <service
+            android:name=".service.CallMonitorService"
+            android:exported="false"
+            android:foregroundServiceType="phoneCall" />
+
+        <!--
+            通話状態 BroadcastReceiver。
+            android:exported="true" が必須。
+            exported=false だとシステムからの PHONE_STATE_CHANGED を受信できない。
+        -->
         <receiver
             android:name=".receiver.CallStateReceiver"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.PHONE_STATE" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+            端末再起動時に監視サービスを自動起動するレシーバー。
+        -->
+        <receiver
+            android:name=".receiver.BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
 

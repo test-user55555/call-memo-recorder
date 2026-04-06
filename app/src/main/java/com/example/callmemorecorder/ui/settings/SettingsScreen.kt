@@ -1,6 +1,8 @@
 package com.example.callmemorecorder.ui.settings
 
+import android.Manifest
 import android.app.Activity
+import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,9 +23,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
 
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
@@ -32,6 +38,16 @@ fun SettingsScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val ftpsTestResult by viewModel.ftpsTestResult.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    // 通話自動録音に必要な権限リスト
+    val callPermissions = buildList {
+        add(Manifest.permission.READ_PHONE_STATE)
+        add(Manifest.permission.RECORD_AUDIO)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+    val callPermState = rememberMultiplePermissionsState(callPermissions)
 
     // Google Sign-In ランチャー
     val signInLauncher = rememberLauncherForActivityResult(
@@ -72,16 +88,44 @@ fun SettingsScreen(
 
             // ── 通話自動録音 ─────────────────────────────────
             SectionCard(title = "通話自動録音") {
+
+                // 必要な権限がすべて付与されているか確認
+                val allGranted = callPermState.allPermissionsGranted
+
+                if (!allGranted) {
+                    InfoBox(
+                        text = "通話を自動録音するには「電話」「マイク」「通知」の権限が必要です。",
+                        isWarning = true
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Button(
+                        onClick = { callPermState.launchMultiplePermissionRequest() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.Lock, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("権限を許可する")
+                    }
+                }
+
                 SwitchRow(
                     title = "通話を自動で録音する",
-                    description = "通話開始時に自動録音、終了時に自動停止します",
+                    description = if (allGranted)
+                        "通話開始時に自動録音、終了時に自動停止します（通知バーに監視アイコンが表示されます）"
+                    else
+                        "権限を許可してから有効化してください",
                     checked = settings.autoRecordCall,
+                    enabled = allGranted,
                     onCheckedChange = { viewModel.setAutoRecordCall(it) }
                 )
                 if (settings.autoRecordCall) {
                     InfoBox(
                         text = "⚠️ 自分の声のみ録音されます（OSの制約により通話相手の声は録音できません）",
                         isWarning = true
+                    )
+                    InfoBox(
+                        text = "📌 通知バーに「通話を監視中」が表示されている間、着信を自動検知します",
+                        isWarning = false
                     )
                 }
             }

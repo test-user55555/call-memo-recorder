@@ -2,6 +2,7 @@ package com.example.callmemorecorder.ui.settings
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import androidx.datastore.preferences.core.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -10,6 +11,7 @@ import com.example.callmemorecorder.data.AppContainer
 import com.example.callmemorecorder.data.repository.DriveRepository
 import com.example.callmemorecorder.data.repository.FtpsConfig
 import com.example.callmemorecorder.data.repository.FtpsRepository
+import com.example.callmemorecorder.service.CallMonitorService
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 
@@ -100,7 +102,20 @@ class SettingsViewModel(
 
     // ── 設定保存メソッド群 ──────────────────────────────────
 
-    fun setAutoRecordCall(v: Boolean) = save { it[KEY_AUTO_RECORD_CALL] = v }
+    fun setAutoRecordCall(v: Boolean) {
+        save { it[KEY_AUTO_RECORD_CALL] = v }
+        // 通話監視サービスをON/OFF連動
+        if (v) {
+            val intent = CallMonitorService.startIntent(context)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        } else {
+            context.startService(CallMonitorService.stopIntent(context))
+        }
+    }
     fun setAutoUpload(v: Boolean)     = save { it[KEY_AUTO_UPLOAD] = v }
     fun setUploadType(v: String)      = save { it[KEY_UPLOAD_TYPE] = v }
     fun setAutoTranscribe(v: Boolean) = save { it[KEY_AUTO_TRANSCRIBE] = v }

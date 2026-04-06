@@ -7,6 +7,8 @@ import android.content.ServiceConnection
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -18,20 +20,17 @@ import com.example.callmemorecorder.domain.model.*
 import com.example.callmemorecorder.service.RecordingService
 import com.example.callmemorecorder.service.RecordingState
 import com.example.callmemorecorder.worker.UploadWorker
-import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
 import java.util.UUID
 
 class HomeViewModel(
     private val context: Context,
-    private val container: AppContainer,
     private val recordRepository: RecordRepository,
     private val driveRepository: DriveRepository,
-    private val workManager: WorkManager
+    private val workManager: WorkManager,
+    private val dataStore: androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences>
 ) : ViewModel() {
 
     companion object {
@@ -42,10 +41,10 @@ class HomeViewModel(
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 return HomeViewModel(
                     context = context.applicationContext,
-                    container = container,
                     recordRepository = container.recordRepository,
                     driveRepository = container.driveRepository,
-                    workManager = WorkManager.getInstance(context)
+                    workManager = WorkManager.getInstance(context),
+                    dataStore = container.dataStore
                 ) as T
             }
         }
@@ -82,7 +81,24 @@ class HomeViewModel(
     }
 
     init {
-        checkDriveStatus()
+        // DataStore の設定変化を監視してホーム画面に反映
+        viewModelScope.launch {
+            dataStore.data.catch { emit(androidx.datastore.preferences.core.emptyPreferences()) }
+                .collect { prefs ->
+                    val uploadType    = prefs[stringPreferencesKey("upload_type")]  ?: "none"
+                    val autoUpload    = prefs[booleanPreferencesKey("auto_upload")] ?: false
+                    val autoRecord    = prefs[booleanPreferencesKey("auto_record_call")] ?: false
+                    val isDriveSignedIn = driveRepository.isSignedIn()
+                    _uiState.update {
+                        it.copy(
+                            uploadType      = uploadType,
+                            autoUpload      = autoUpload,
+                            autoRecordCall  = autoRecord,
+                            isDriveConnected = isDriveSignedIn
+                        )
+                    }
+                }
+        }
     }
 
     fun bindService() {
@@ -95,6 +111,11 @@ class HomeViewModel(
             context.unbindService(serviceConnection)
             isBound = false
         }
+    }
+
+    /** onResume 相当: 設定画面から戻ったときに Drive サインイン状態を最新化 */
+    fun refreshStatus() {
+        _uiState.update { it.copy(isDriveConnected = driveRepository.isSignedIn()) }
     }
 
     fun startRecording() {
@@ -145,8 +166,9 @@ class HomeViewModel(
                     updatedAt = System.currentTimeMillis()
                 )
                 recordRepository.insertRecord(record)
-                // DataStore から自動アップロード設定を確認
-                val prefs = container.dataStore.data.first()
+
+                // アップロード先に応じてワーカーをキュー
+                val prefs = dataStore.data.first()
                 val uploadType = prefs[stringPreferencesKey("upload_type")] ?: "none"
                 val autoUpload = prefs[booleanPreferencesKey("auto_upload")] ?: false
                 if (autoUpload && uploadType != "none") {
@@ -159,10 +181,6 @@ class HomeViewModel(
                 _uiState.update { it.copy(errorMessage = e.message) }
             }
         }
-    }
-
-    private fun checkDriveStatus() {
-        _uiState.update { it.copy(isDriveConnected = driveRepository.isSignedIn()) }
     }
 
     fun clearError() {
@@ -179,6 +197,9 @@ data class HomeUiState(
     val recordingState: RecordingState = RecordingState.Idle,
     val elapsedTimeMs: Long = 0L,
     val isDriveConnected: Boolean = false,
+    val uploadType: String = "none",      // "drive" / "ftps" / "none"
+    val autoUpload: Boolean = false,
+    val autoRecordCall: Boolean = false,
     val lastSavedRecordId: String? = null,
     val errorMessage: String? = null
 )
