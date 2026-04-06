@@ -1,6 +1,8 @@
 package com.example.callmemorecorder.ui.history
 
-import android.media.MediaPlayer
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -11,7 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -29,16 +30,11 @@ fun HistoryScreen(
     viewModel: HistoryViewModel
 ) {
     val records by viewModel.records.collectAsStateWithLifecycle()
-    // 現在再生中のレコードID
-    var playingRecordId by remember { mutableStateOf<String?>(null) }
-    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
 
-    // 画面離脱時にプレイヤーを解放
+    // 画面離脱時に再生を停止
     DisposableEffect(Unit) {
-        onDispose {
-            mediaPlayer?.release()
-            mediaPlayer = null
-        }
+        onDispose { viewModel.stopPlayback() }
     }
 
     Scaffold(
@@ -47,7 +43,7 @@ fun HistoryScreen(
                 title = { Text("録音履歴") },
                 navigationIcon = {
                     IconButton(onClick = {
-                        mediaPlayer?.release(); mediaPlayer = null
+                        viewModel.stopPlayback()
                         onNavigateBack()
                     }) {
                         Icon(Icons.Filled.ArrowBack, contentDescription = "Back")
@@ -65,15 +61,21 @@ fun HistoryScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Filled.Mic, contentDescription = null,
+                    Icon(
+                        Icons.Filled.Mic, contentDescription = null,
                         modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("録音履歴がありません",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "録音履歴がありません",
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("ホーム画面で録音を開始してください",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        "ホーム画面で録音を開始してください",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         } else {
@@ -83,34 +85,16 @@ fun HistoryScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(records, key = { it.id }) { record ->
+                    val isCurrentRecord = playbackState.recordId == record.id
                     RecordItemCard(
                         record = record,
-                        isPlaying = playingRecordId == record.id,
-                        onPlayPause = { rec ->
-                            if (playingRecordId == rec.id) {
-                                // 停止
-                                mediaPlayer?.release()
-                                mediaPlayer = null
-                                playingRecordId = null
-                            } else {
-                                // 再生
-                                mediaPlayer?.release()
-                                val path = rec.localPath
-                                if (path != null && File(path).exists()) {
-                                    mediaPlayer = MediaPlayer().apply {
-                                        setDataSource(path)
-                                        prepare()
-                                        start()
-                                        setOnCompletionListener {
-                                            release()
-                                            mediaPlayer = null
-                                            playingRecordId = null
-                                        }
-                                    }
-                                    playingRecordId = rec.id
-                                }
-                            }
-                        },
+                        isPlaying = isCurrentRecord && playbackState.isPlaying,
+                        isExpanded = isCurrentRecord,
+                        playbackState = if (isCurrentRecord) playbackState else PlaybackState(),
+                        onPlayPause = { viewModel.togglePlayback(record) },
+                        onSeekForward = { viewModel.seekForward() },
+                        onSeekBackward = { viewModel.seekBackward() },
+                        onSeekTo = { progress -> viewModel.seekTo(progress) },
                         onClick = { onNavigateToDetail(record.id) }
                     )
                 }
@@ -124,7 +108,12 @@ fun HistoryScreen(
 private fun RecordItemCard(
     record: RecordItem,
     isPlaying: Boolean,
-    onPlayPause: (RecordItem) -> Unit,
+    isExpanded: Boolean,
+    playbackState: PlaybackState,
+    onPlayPause: () -> Unit,
+    onSeekForward: () -> Unit,
+    onSeekBackward: () -> Unit,
+    onSeekTo: (Float) -> Unit,
     onClick: () -> Unit
 ) {
     val hasFile = record.localPath != null && File(record.localPath).exists()
@@ -135,7 +124,7 @@ private fun RecordItemCard(
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
 
-            // ── 上段: 発着信アイコン + タイトル + 再生ボタン ──
+            // ── 上段: 発着信アイコン + 通話情報 + 再生ボタン ──
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
@@ -144,16 +133,12 @@ private fun RecordItemCard(
                 CallDirectionIcon(record.callDirection)
                 Spacer(Modifier.width(8.dp))
 
-                // タイトル（相手名または番号）
+                // 通話情報
                 Column(modifier = Modifier.weight(1f)) {
+                    // 通話相手名（連絡先名 → 電話番号 → タイトル の順でフォールバック）
                     val displayName = record.callerName
                         ?: record.callerNumber
                         ?: record.title.ifBlank { null }
-                    val dirLabel = when (record.callDirection) {
-                        CallDirection.INCOMING -> "着信"
-                        CallDirection.OUTGOING -> "発信"
-                        CallDirection.UNKNOWN  -> "通話"
-                    }
                     if (displayName != null) {
                         Text(
                             text = displayName,
@@ -161,6 +146,12 @@ private fun RecordItemCard(
                             fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
+                    }
+                    // 発着信ラベル + 日時
+                    val dirLabel = when (record.callDirection) {
+                        CallDirection.INCOMING -> "着信"
+                        CallDirection.OUTGOING -> "発信"
+                        CallDirection.UNKNOWN  -> "録音"
                     }
                     Text(
                         text = "$dirLabel  ${formatDatetime(record.createdAt)}",
@@ -174,29 +165,119 @@ private fun RecordItemCard(
                     )
                 }
 
-                // 再生/停止ボタン
+                // 再生/一時停止ボタン
                 FilledTonalIconButton(
-                    onClick = { onPlayPause(record) },
+                    onClick = onPlayPause,
                     enabled = hasFile,
                     colors = IconButtonDefaults.filledTonalIconButtonColors(
-                        containerColor = if (isPlaying)
-                            MaterialTheme.colorScheme.errorContainer
-                        else
-                            MaterialTheme.colorScheme.primaryContainer
+                        containerColor = when {
+                            isPlaying -> MaterialTheme.colorScheme.errorContainer
+                            isExpanded && !isPlaying && playbackState.recordId != null ->
+                                MaterialTheme.colorScheme.secondaryContainer
+                            else -> MaterialTheme.colorScheme.primaryContainer
+                        }
                     )
                 ) {
                     Icon(
-                        imageVector = if (isPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                        contentDescription = if (isPlaying) "停止" else "再生",
-                        tint = if (isPlaying)
-                            MaterialTheme.colorScheme.onErrorContainer
-                        else
-                            MaterialTheme.colorScheme.onPrimaryContainer
+                        imageVector = when {
+                            isPlaying -> Icons.Filled.Pause
+                            isExpanded && playbackState.currentPositionMs > 0 -> Icons.Filled.PlayArrow
+                            else -> Icons.Filled.PlayArrow
+                        },
+                        contentDescription = if (isPlaying) "一時停止" else "再生",
+                        tint = when {
+                            isPlaying -> MaterialTheme.colorScheme.onErrorContainer
+                            isExpanded && !isPlaying && playbackState.recordId != null ->
+                                MaterialTheme.colorScheme.onSecondaryContainer
+                            else -> MaterialTheme.colorScheme.onPrimaryContainer
+                        }
                     )
                 }
             }
 
-            if (record.localPath == null || !File(record.localPath).exists()) {
+            // ── プログレスバー & シークコントロール（再生中のみ展開） ──
+            AnimatedVisibility(
+                visible = isExpanded,
+                enter = expandVertically(),
+                exit = shrinkVertically()
+            ) {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Spacer(Modifier.height(10.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    Spacer(Modifier.height(8.dp))
+
+                    // 時間表示
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = formatDuration(playbackState.currentPositionMs),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = formatDuration(playbackState.durationMs),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    // シークバー
+                    Slider(
+                        value = playbackState.progress,
+                        onValueChange = { onSeekTo(it) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = SliderDefaults.colors(
+                            thumbColor = MaterialTheme.colorScheme.primary,
+                            activeTrackColor = MaterialTheme.colorScheme.primary,
+                            inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                        )
+                    )
+
+                    // シークボタン行
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 早戻し -10秒
+                        IconButton(onClick = onSeekBackward) {
+                            Icon(
+                                Icons.Filled.Replay10,
+                                contentDescription = "10秒戻す",
+                                modifier = Modifier.size(32.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Spacer(Modifier.width(24.dp))
+                        // 再生/一時停止（中央大ボタン）
+                        FilledIconButton(
+                            onClick = onPlayPause,
+                            modifier = Modifier.size(52.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                                contentDescription = if (isPlaying) "一時停止" else "再生",
+                                modifier = Modifier.size(30.dp)
+                            )
+                        }
+                        Spacer(Modifier.width(24.dp))
+                        // 早送り +10秒
+                        IconButton(onClick = onSeekForward) {
+                            Icon(
+                                Icons.Filled.Forward10,
+                                contentDescription = "10秒進む",
+                                modifier = Modifier.size(32.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ファイルなし警告
+            if (!hasFile) {
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "録音ファイルが見つかりません",
@@ -207,7 +288,7 @@ private fun RecordItemCard(
 
             Spacer(Modifier.height(8.dp))
 
-            // ── 下段: ステータスチップ ──
+            // ── ステータスチップ ──
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier.fillMaxWidth()
@@ -230,21 +311,9 @@ private fun RecordItemCard(
 @Composable
 private fun CallDirectionIcon(direction: CallDirection) {
     val (icon, tint, label) = when (direction) {
-        CallDirection.INCOMING -> Triple(
-            Icons.Filled.CallReceived,
-            Color(0xFF2196F3),  // 青: 着信
-            "着信"
-        )
-        CallDirection.OUTGOING -> Triple(
-            Icons.Filled.CallMade,
-            Color(0xFF4CAF50),  // 緑: 発信
-            "発信"
-        )
-        CallDirection.UNKNOWN  -> Triple(
-            Icons.Filled.Mic,
-            MaterialTheme.colorScheme.onSurfaceVariant,
-            "録音"
-        )
+        CallDirection.INCOMING -> Triple(Icons.Filled.CallReceived, Color(0xFF2196F3), "着信")
+        CallDirection.OUTGOING -> Triple(Icons.Filled.CallMade,     Color(0xFF4CAF50), "発信")
+        CallDirection.UNKNOWN  -> Triple(Icons.Filled.Mic, MaterialTheme.colorScheme.onSurfaceVariant, "録音")
     }
     Icon(
         imageVector = icon,
@@ -257,17 +326,15 @@ private fun CallDirectionIcon(direction: CallDirection) {
 @Composable
 private fun UploadStatusChip(status: UploadStatus) {
     val (label, icon) = when (status) {
-        UploadStatus.NOT_STARTED -> "未アップロード" to Icons.Filled.CloudOff
+        UploadStatus.NOT_STARTED -> "未アップロード"  to Icons.Filled.CloudOff
         UploadStatus.QUEUED      -> "アップロード待ち" to Icons.Filled.CloudQueue
-        UploadStatus.UPLOADING   -> "アップロード中" to Icons.Filled.CloudUpload
-        UploadStatus.UPLOADED    -> "保存済み" to Icons.Filled.CloudDone
+        UploadStatus.UPLOADING   -> "アップロード中"  to Icons.Filled.CloudUpload
+        UploadStatus.UPLOADED    -> "保存済み"       to Icons.Filled.CloudDone
         UploadStatus.ERROR       -> "アップロードエラー" to Icons.Filled.Warning
     }
     SuggestionChip(
         onClick = {},
         label = { Text(label, style = MaterialTheme.typography.labelSmall) },
-        icon = {
-            Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp))
-        }
+        icon = { Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp)) }
     )
 }
