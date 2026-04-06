@@ -33,40 +33,41 @@ fun HistoryScreen(
     val records by viewModel.records.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
 
-    // 選択モード状態
     var isSelectionMode by remember { mutableStateOf(false) }
-    val selectedIds: androidx.compose.runtime.snapshots.SnapshotStateSet<String> = remember { mutableStateSetOf() }
-
-    // 確認ダイアログ
+    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
-    // 選択モード終了時にクリア
     LaunchedEffect(isSelectionMode) {
-        if (!isSelectionMode) selectedIds.clear()
+        if (!isSelectionMode) selectedIds = emptySet()
     }
 
-    // 画面離脱時に再生を停止
     DisposableEffect(Unit) {
         onDispose { viewModel.stopPlayback() }
     }
 
-    // 削除確認ダイアログ
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
-            icon = { Icon(Icons.Filled.DeleteForever, contentDescription = null, tint = MaterialTheme.colorScheme.error) },
+            icon = {
+                Icon(
+                    Icons.Filled.DeleteForever,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
             title = { Text("一括削除の確認") },
             text = {
+                val cnt = selectedIds.count()
                 Text(
-                    text = "${selectedIds.size}件の録音を削除します。\nこの操作は取り消せません。",
+                    text = "${cnt}件の録音を削除します。\nこの操作は取り消せません。",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },
             confirmButton = {
                 Button(
                     onClick = {
-                        viewModel.deleteRecords(selectedIds.toSet())
-                        selectedIds.clear()
+                        viewModel.deleteRecords(selectedIds)
+                        selectedIds = emptySet()
                         isSelectionMode = false
                         showDeleteConfirm = false
                     },
@@ -92,7 +93,7 @@ fun HistoryScreen(
             TopAppBar(
                 title = {
                     if (isSelectionMode) {
-                        Text("${selectedIds.size}件選択中")
+                        Text("${selectedIds.count()}件選択中")
                     } else {
                         Text("録音履歴")
                     }
@@ -114,18 +115,13 @@ fun HistoryScreen(
                 },
                 actions = {
                     if (isSelectionMode) {
-                        // 全選択 / 全解除ボタン
-                        val allSelected = records.isNotEmpty() && selectedIds.size == records.size
+                        val allSelected = records.isNotEmpty() && selectedIds.count() == records.size
                         TextButton(onClick = {
-                            if (allSelected) {
-                                selectedIds.clear()
-                            } else {
-                                selectedIds.addAll(records.map { it.id })
-                            }
+                            selectedIds = if (allSelected) emptySet()
+                            else records.map { it.id }.toSet()
                         }) {
                             Text(if (allSelected) "全解除" else "全選択")
                         }
-                        // 削除ボタン（選択がある場合のみ有効）
                         IconButton(
                             onClick = { if (selectedIds.isNotEmpty()) showDeleteConfirm = true },
                             enabled = selectedIds.isNotEmpty()
@@ -140,10 +136,9 @@ fun HistoryScreen(
                             )
                         }
                     } else {
-                        // 選択モード開始ボタン（履歴がある場合のみ表示）
                         if (records.isNotEmpty()) {
                             IconButton(onClick = { isSelectionMode = true }) {
-                            Icon(Icons.Filled.DeleteSweep, contentDescription = "一括選択")
+                                Icon(Icons.Filled.DeleteSweep, contentDescription = "一括削除")
                             }
                         }
                     }
@@ -153,7 +148,9 @@ fun HistoryScreen(
     ) { paddingValues ->
         if (records.isEmpty()) {
             Box(
-                modifier = Modifier.fillMaxSize().padding(paddingValues),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues),
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -179,13 +176,15 @@ fun HistoryScreen(
             }
         } else {
             LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(paddingValues),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(records, key = { it.id }) { record ->
                     val isCurrentRecord = playbackState.recordId == record.id
-                    val isSelected = record.id in selectedIds
+                    val isSelected = selectedIds.contains(record.id)
                     RecordItemCard(
                         record = record,
                         isPlaying = isCurrentRecord && playbackState.isPlaying,
@@ -193,26 +192,19 @@ fun HistoryScreen(
                         playbackState = if (isCurrentRecord) playbackState else PlaybackState(),
                         isSelectionMode = isSelectionMode,
                         isSelected = isSelected,
-                        onPlayPause = {
-                            if (!isSelectionMode) viewModel.togglePlayback(record)
-                        },
+                        onPlayPause = { if (!isSelectionMode) viewModel.togglePlayback(record) },
                         onSeekForward = { viewModel.seekForward() },
                         onSeekBackward = { viewModel.seekBackward() },
-                        onSeekTo = { progress -> viewModel.seekTo(progress) },
+                        onSeekTo = { viewModel.seekTo(it) },
                         onClick = {
                             if (isSelectionMode) {
-                                // 選択モード: チェックトグル
-                                if (isSelected) selectedIds.remove(record.id)
-                                else selectedIds.add(record.id)
+                                selectedIds = if (isSelected) {
+                                    selectedIds - record.id
+                                } else {
+                                    selectedIds + record.id
+                                }
                             } else {
                                 onNavigateToDetail(record.id)
-                            }
-                        },
-                        onLongClick = {
-                            // 長押しで選択モード開始
-                            if (!isSelectionMode) {
-                                isSelectionMode = true
-                                selectedIds.add(record.id)
                             }
                         }
                     )
@@ -235,8 +227,7 @@ private fun RecordItemCard(
     onSeekForward: () -> Unit,
     onSeekBackward: () -> Unit,
     onSeekTo: (Float) -> Unit,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onClick: () -> Unit
 ) {
     val hasFile = record.localPath != null && File(record.localPath).exists()
 
@@ -256,7 +247,6 @@ private fun RecordItemCard(
                 .padding(start = 4.dp),
             verticalAlignment = Alignment.Top
         ) {
-            // 選択モード時のチェックボックス
             if (isSelectionMode) {
                 Checkbox(
                     checked = isSelected,
@@ -275,18 +265,14 @@ private fun RecordItemCard(
                         bottom = 12.dp
                     )
             ) {
-                // ── 上段: 発着信アイコン + 通話情報 + 再生ボタン ──
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 発着信アイコン
                     CallDirectionIcon(record.callDirection)
                     Spacer(Modifier.width(8.dp))
 
-                    // 通話情報
                     Column(modifier = Modifier.weight(1f)) {
-                        // 通話相手名（連絡先名 → 電話番号 → タイトル の順でフォールバック）
                         val displayName = record.callerName
                             ?: record.callerNumber
                             ?: record.title.ifBlank { null }
@@ -298,7 +284,6 @@ private fun RecordItemCard(
                                 maxLines = 1
                             )
                         }
-                        // 発着信ラベル + 日時
                         val dirLabel = when (record.callDirection) {
                             CallDirection.INCOMING -> "着信"
                             CallDirection.OUTGOING -> "発信"
@@ -316,35 +301,29 @@ private fun RecordItemCard(
                         )
                     }
 
-                    // 再生/一時停止ボタン（選択モード時は非表示）
                     if (!isSelectionMode) {
                         FilledTonalIconButton(
                             onClick = onPlayPause,
                             enabled = hasFile,
                             colors = IconButtonDefaults.filledTonalIconButtonColors(
-                                containerColor = when {
-                                    isPlaying -> MaterialTheme.colorScheme.errorContainer
-                                    isExpanded && !isPlaying && playbackState.recordId != null ->
-                                        MaterialTheme.colorScheme.secondaryContainer
-                                    else -> MaterialTheme.colorScheme.primaryContainer
-                                }
+                                containerColor = if (isPlaying)
+                                    MaterialTheme.colorScheme.errorContainer
+                                else
+                                    MaterialTheme.colorScheme.primaryContainer
                             )
                         ) {
                             Icon(
                                 imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                                 contentDescription = if (isPlaying) "一時停止" else "再生",
-                                tint = when {
-                                    isPlaying -> MaterialTheme.colorScheme.onErrorContainer
-                                    isExpanded && !isPlaying && playbackState.recordId != null ->
-                                        MaterialTheme.colorScheme.onSecondaryContainer
-                                    else -> MaterialTheme.colorScheme.onPrimaryContainer
-                                }
+                                tint = if (isPlaying)
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                else
+                                    MaterialTheme.colorScheme.onPrimaryContainer
                             )
                         }
                     }
                 }
 
-                // ── プログレスバー & シークコントロール（再生中のみ展開） ──
                 AnimatedVisibility(
                     visible = isExpanded,
                     enter = expandVertically(),
@@ -355,7 +334,6 @@ private fun RecordItemCard(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                         Spacer(Modifier.height(8.dp))
 
-                        // 時間表示
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -372,25 +350,17 @@ private fun RecordItemCard(
                             )
                         }
 
-                        // シークバー
                         Slider(
                             value = playbackState.progress,
                             onValueChange = { onSeekTo(it) },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = SliderDefaults.colors(
-                                thumbColor = MaterialTheme.colorScheme.primary,
-                                activeTrackColor = MaterialTheme.colorScheme.primary,
-                                inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
+                            modifier = Modifier.fillMaxWidth()
                         )
 
-                        // シークボタン行
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.Center,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // 早戻し -10秒
                             IconButton(onClick = onSeekBackward) {
                                 Icon(
                                     Icons.Filled.Replay10,
@@ -400,7 +370,6 @@ private fun RecordItemCard(
                                 )
                             }
                             Spacer(Modifier.width(24.dp))
-                            // 再生/一時停止（中央大ボタン）
                             FilledIconButton(
                                 onClick = onPlayPause,
                                 modifier = Modifier.size(52.dp)
@@ -412,7 +381,6 @@ private fun RecordItemCard(
                                 )
                             }
                             Spacer(Modifier.width(24.dp))
-                            // 早送り +10秒
                             IconButton(onClick = onSeekForward) {
                                 Icon(
                                     Icons.Filled.Forward10,
@@ -425,7 +393,6 @@ private fun RecordItemCard(
                     }
                 }
 
-                // ファイルなし警告
                 if (!hasFile && !isSelectionMode) {
                     Spacer(Modifier.height(4.dp))
                     Text(
@@ -437,7 +404,6 @@ private fun RecordItemCard(
 
                 Spacer(Modifier.height(8.dp))
 
-                // ── ステータスチップ ──
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     modifier = Modifier.fillMaxWidth()
@@ -476,10 +442,10 @@ private fun CallDirectionIcon(direction: CallDirection) {
 @Composable
 private fun UploadStatusChip(status: UploadStatus) {
     val (label, icon) = when (status) {
-        UploadStatus.NOT_STARTED -> "未アップロード"  to Icons.Filled.CloudOff
-        UploadStatus.QUEUED      -> "アップロード待ち" to Icons.Filled.CloudQueue
-        UploadStatus.UPLOADING   -> "アップロード中"  to Icons.Filled.CloudUpload
-        UploadStatus.UPLOADED    -> "保存済み"       to Icons.Filled.CloudDone
+        UploadStatus.NOT_STARTED -> "未アップロード"   to Icons.Filled.CloudOff
+        UploadStatus.QUEUED      -> "アップロード待ち"  to Icons.Filled.CloudQueue
+        UploadStatus.UPLOADING   -> "アップロード中"   to Icons.Filled.CloudUpload
+        UploadStatus.UPLOADED    -> "保存済み"        to Icons.Filled.CloudDone
         UploadStatus.ERROR       -> "アップロードエラー" to Icons.Filled.Warning
     }
     SuggestionChip(
