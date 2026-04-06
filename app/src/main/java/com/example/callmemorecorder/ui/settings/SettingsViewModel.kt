@@ -54,30 +54,36 @@ class SettingsViewModel(
         }
     }
 
+    // Drive サインイン状態を保持する MutableStateFlow（refreshDriveSignInState() で更新）
+    private val _driveSignedIn = MutableStateFlow(driveRepository.isSignedIn())
+    private val _driveEmail = MutableStateFlow(driveRepository.getSignedInEmail())
+
     // 設定値のFlow
-    val settings: StateFlow<SettingsState> = dataStore.data
-        .catch { emit(emptyPreferences()) }
-        .map { prefs ->
-            SettingsState(
-                autoRecordCall    = prefs[KEY_AUTO_RECORD_CALL]        ?: false,
-                autoUpload        = prefs[KEY_AUTO_UPLOAD]             ?: false,
-                uploadType        = prefs[KEY_UPLOAD_TYPE]             ?: "none",
-                autoTranscribe    = prefs[KEY_AUTO_TRANSCRIBE]         ?: false,
-                deleteAfterUpload = prefs[KEY_DELETE_AFTER_UPLOAD]     ?: false,
-                experimentalFeatures = prefs[KEY_EXPERIMENTAL]         ?: false,
-                // Drive
-                isDriveSignedIn   = driveRepository.isSignedIn(),
-                driveEmail        = driveRepository.getSignedInEmail(),
-                driveFolderName   = prefs[KEY_DRIVE_FOLDER_NAME]       ?: "CallMemoRecorder",
-                // FTPS
-                ftpsHost          = prefs[KEY_FTPS_HOST]               ?: "",
-                ftpsPort          = prefs[KEY_FTPS_PORT]               ?: 21,
-                ftpsUsername      = prefs[KEY_FTPS_USERNAME]           ?: "",
-                ftpsPassword      = prefs[KEY_FTPS_PASSWORD]           ?: "",
-                ftpsPath          = prefs[KEY_FTPS_PATH]               ?: "/recordings",
-            )
-        }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsState())
+    val settings: StateFlow<SettingsState> = combine(
+        dataStore.data.catch { emit(emptyPreferences()) },
+        _driveSignedIn,
+        _driveEmail
+    ) { prefs, signedIn, email ->
+        SettingsState(
+            autoRecordCall    = prefs[KEY_AUTO_RECORD_CALL]        ?: false,
+            autoUpload        = prefs[KEY_AUTO_UPLOAD]             ?: false,
+            uploadType        = prefs[KEY_UPLOAD_TYPE]             ?: "none",
+            autoTranscribe    = prefs[KEY_AUTO_TRANSCRIBE]         ?: false,
+            deleteAfterUpload = prefs[KEY_DELETE_AFTER_UPLOAD]     ?: false,
+            experimentalFeatures = prefs[KEY_EXPERIMENTAL]         ?: false,
+            // Drive（MutableStateFlow から読み出す）
+            isDriveSignedIn   = signedIn,
+            driveEmail        = email,
+            driveFolderName   = prefs[KEY_DRIVE_FOLDER_NAME]       ?: "CallMemoRecorder",
+            // FTPS
+            ftpsHost          = prefs[KEY_FTPS_HOST]               ?: "",
+            ftpsPort          = prefs[KEY_FTPS_PORT]               ?: 21,
+            ftpsUsername      = prefs[KEY_FTPS_USERNAME]           ?: "",
+            ftpsPassword      = prefs[KEY_FTPS_PASSWORD]           ?: "",
+            ftpsPath          = prefs[KEY_FTPS_PATH]               ?: "/recordings",
+        )
+    }
+    .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsState())
 
     // FTPS接続テスト結果
     private val _ftpsTestResult = MutableStateFlow<String?>(null)
@@ -94,8 +100,9 @@ class SettingsViewModel(
     fun onGoogleSignInSuccess() {
         viewModelScope.launch {
             // GoogleSignIn.getLastSignedInAccount() のキャッシュが更新されるまで少し待つ
-            kotlinx.coroutines.delay(300)
-            dataStore.edit { } // Flow再評価トリガー
+            kotlinx.coroutines.delay(500)
+            _driveSignedIn.value = driveRepository.isSignedIn()
+            _driveEmail.value = driveRepository.getSignedInEmail()
         }
     }
 
@@ -103,7 +110,8 @@ class SettingsViewModel(
     fun signOutGoogle() = viewModelScope.launch {
         driveRepository.signOut()
         kotlinx.coroutines.delay(300)
-        dataStore.edit { }
+        _driveSignedIn.value = false
+        _driveEmail.value = null
     }
 
     /**
@@ -111,9 +119,8 @@ class SettingsViewModel(
      * GoogleSignIn.getLastSignedInAccount() のキャッシュ更新後に呼ぶ。
      */
     fun refreshDriveSignInState() {
-        viewModelScope.launch {
-            dataStore.edit { }
-        }
+        _driveSignedIn.value = driveRepository.isSignedIn()
+        _driveEmail.value = driveRepository.getSignedInEmail()
     }
 
     /** Drive 接続テスト: 指定フォルダに "接続テスト.txt" をアップロード */

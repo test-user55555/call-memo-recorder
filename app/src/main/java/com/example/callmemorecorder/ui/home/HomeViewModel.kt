@@ -88,16 +88,22 @@ class HomeViewModel(
                     val uploadType    = prefs[stringPreferencesKey("upload_type")]  ?: "none"
                     val autoUpload    = prefs[booleanPreferencesKey("auto_upload")] ?: false
                     val autoRecord    = prefs[booleanPreferencesKey("auto_record_call")] ?: false
-                    val isDriveSignedIn = driveRepository.isSignedIn()
                     _uiState.update {
                         it.copy(
                             uploadType      = uploadType,
                             autoUpload      = autoUpload,
-                            autoRecordCall  = autoRecord,
-                            isDriveConnected = isDriveSignedIn
+                            autoRecordCall  = autoRecord
                         )
                     }
                 }
+        }
+        // Drive サインイン状態の定期確認（3秒ごと）
+        viewModelScope.launch {
+            while (true) {
+                val isDriveSignedIn = driveRepository.isSignedIn()
+                _uiState.update { it.copy(isDriveConnected = isDriveSignedIn) }
+                kotlinx.coroutines.delay(3000)
+            }
         }
     }
 

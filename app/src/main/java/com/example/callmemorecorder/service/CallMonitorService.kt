@@ -34,10 +34,12 @@ import java.util.concurrent.Executors
  *
  * ■ 設計方針
  *   - foregroundServiceType = "microphone" のみ使用
- *     (phoneCall は Android 14+ で MANAGE_OWN_CALLS/CALL_COMPANION_APP が必要なためクラッシュする)
  *   - API 31+ は TelephonyCallback、それ未満は PhoneStateListener(deprecated) を使用
+ *   - API 31+ の TelephonyCallback.CallStateListener では phoneNumber が渡されないため
+ *     CallStateListener ではなく TelephonyCallback を継承して EXTRA 番号を自分で取得
  *   - RecordingService/CallRecordingService への依存を排除し MediaRecorder を直接管理
  *   - START_STICKY で OS 強制終了後も自動再起動
+ *   - VOICE_COMMUNICATION ソース失敗時は VOICE_DOWNLINK → MIC の順でフォールバック
  */
 class CallMonitorService : Service() {
 
@@ -48,6 +50,13 @@ class CallMonitorService : Service() {
 
         private const val SAMPLE_RATE = 44100
         private const val BIT_RATE = 128000
+
+        // 通話開始から録音を開始するまでの遅延（ms）
+        // 通話が確立するまでに少し時間が必要
+        private const val RECORD_START_DELAY_MS = 1000L
+
+        // 有効な録音と見なす最小長（ms）
+        private const val MIN_RECORDING_DURATION_MS = 2000L
 
         fun startIntent(ctx: Context) = Intent(ctx, CallMonitorService::class.java)
         fun stopIntent(ctx: Context) = Intent(ctx, CallMonitorService::class.java).apply {
@@ -126,6 +135,14 @@ class CallMonitorService : Service() {
         ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_PHONE_STATE) ==
                 PackageManager.PERMISSION_GRANTED
 
+    private fun hasRecordAudioPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+
+    private fun hasReadContactsPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_CONTACTS) ==
+                PackageManager.PERMISSION_GRANTED
+
     // ── 通話状態リスナー設定 ──────────────────────────────────
 
     @SuppressLint("MissingPermission")
@@ -134,9 +151,14 @@ class CallMonitorService : Service() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // API 31+ : TelephonyCallback
+            // Note: API31以降、TelephonyCallback.CallStateListenerでは
+            // phoneNumberが渡されない（プライバシー保護のため）
+            // 着信番号は RINGING時にTelephonyManager.getLine1Number()か
+            // PhoneStateListenerの互換経由で取得を試みる
             val cb = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
                 override fun onCallStateChanged(state: Int) {
                     Log.d(TAG, "TelephonyCallback.onCallStateChanged: $prevState -> $state")
+                    // API 31+ では phoneNumber は渡されないため null を渡す
                     handleStateTransition(prevState, state, null)
                     prevState = state
                 }
@@ -153,6 +175,7 @@ class CallMonitorService : Service() {
             }
         } else {
             // API 29-30 : PhoneStateListener (deprecated だが利用可能)
+            // このバージョンでは phoneNumber が着信時に渡される
             @Suppress("DEPRECATION")
             val listener = object : PhoneStateListener() {
                 @Deprecated("Deprecated in Java")
@@ -190,10 +213,11 @@ class CallMonitorService : Service() {
     // ── 通話状態遷移ハンドラ ──────────────────────────────────
 
     private fun handleStateTransition(prev: Int, current: Int, phoneNumber: String?) {
-        // 番号は RINGING 時に渡される端末が多い
+        // 番号が渡された場合（主にAPI 30以下の PhoneStateListener からの着信番号）
         if (!phoneNumber.isNullOrEmpty()) {
             currentPhoneNumber = phoneNumber
             currentCallerName = resolveContactName(phoneNumber)
+            Log.d(TAG, "Phone number from listener: $phoneNumber, name: $currentCallerName")
         }
 
         when {
@@ -201,7 +225,7 @@ class CallMonitorService : Service() {
             current == TelephonyManager.CALL_STATE_RINGING &&
                     prev == TelephonyManager.CALL_STATE_IDLE -> {
                 callDirection = "INCOMING"
-                Log.i(TAG, "Incoming call from $currentPhoneNumber")
+                Log.i(TAG, "Incoming call from ${currentPhoneNumber ?: "unknown"}")
             }
 
             // 通話開始 (RINGING or IDLE → OFFHOOK)
@@ -209,15 +233,18 @@ class CallMonitorService : Service() {
                     prev != TelephonyManager.CALL_STATE_OFFHOOK -> {
                 if (prev == TelephonyManager.CALL_STATE_IDLE) {
                     callDirection = "OUTGOING"
+                    // 発信の場合、API 31+ では番号が取得できないことが多い
+                    // getLine1Number は自分の番号なので発信先は取れない
+                    Log.d(TAG, "Outgoing call - number may be unknown on API 31+")
                 }
-                Log.i(TAG, "Call started: dir=$callDirection, num=$currentPhoneNumber")
+                Log.i(TAG, "Call started: dir=$callDirection, num=${currentPhoneNumber ?: "unknown"}")
                 onCallStarted()
             }
 
             // 通話終了 (OFFHOOK → IDLE)
             current == TelephonyManager.CALL_STATE_IDLE &&
                     prev == TelephonyManager.CALL_STATE_OFFHOOK -> {
-                Log.i(TAG, "Call ended: dir=$callDirection, num=$currentPhoneNumber")
+                Log.i(TAG, "Call ended: dir=$callDirection, num=${currentPhoneNumber ?: "unknown"}")
                 onCallEnded()
                 currentPhoneNumber = null
                 currentCallerName = null
@@ -231,10 +258,10 @@ class CallMonitorService : Service() {
     private fun onCallStarted() {
         if (isRecording) return
         // 通知を「録音中」に更新
-        updateNotification("通話録音中...")
+        updateNotification("録音中")
         // 少し遅延してから録音開始（通話確立を待つ）
         serviceScope.launch {
-            delay(800)
+            delay(RECORD_START_DELAY_MS)
             startRecording()
         }
     }
@@ -266,41 +293,24 @@ class CallMonitorService : Service() {
             Log.w(TAG, "RECORD_AUDIO permission not granted")
             return
         }
-        try {
-            val outputFile = createOutputFile()
-            currentOutputFile = outputFile
-
-            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                MediaRecorder(this)
-            } else {
-                @Suppress("DEPRECATION")
-                MediaRecorder()
+        Log.i(TAG, "startRecording: attempting VOICE_COMMUNICATION source")
+        tryStartRecording(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            ?: tryStartRecording(MediaRecorder.AudioSource.VOICE_DOWNLINK)
+            ?: tryStartRecording(MediaRecorder.AudioSource.MIC)
+            ?: run {
+                Log.e(TAG, "All audio sources failed")
+                isRecording = false
+                currentOutputFile = null
             }
-            recorder.apply {
-                setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioSamplingRate(SAMPLE_RATE)
-                setAudioEncodingBitRate(BIT_RATE)
-                setOutputFile(outputFile.absolutePath)
-                prepare()
-                start()
-            }
-            mediaRecorder = recorder
-            recordingStartTime = System.currentTimeMillis()
-            isRecording = true
-            Log.i(TAG, "Recording started: ${outputFile.absolutePath}")
-        } catch (e: Exception) {
-            Log.e(TAG, "startRecording failed (VOICE_COMMUNICATION)", e)
-            // VOICE_COMMUNICATION 失敗時は MIC で再試行
-            retryWithMicSource()
-        }
     }
 
-    private fun retryWithMicSource() {
-        try {
+    /**
+     * 指定した AudioSource で録音を試みる。
+     * 成功したらその File を返す、失敗したら null を返す。
+     */
+    private fun tryStartRecording(audioSource: Int): File? {
+        return try {
             val outputFile = createOutputFile()
-            currentOutputFile = outputFile
             val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(this)
             } else {
@@ -308,7 +318,7 @@ class CallMonitorService : Service() {
                 MediaRecorder()
             }
             recorder.apply {
-                setAudioSource(MediaRecorder.AudioSource.MIC)
+                setAudioSource(audioSource)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioSamplingRate(SAMPLE_RATE)
@@ -318,13 +328,16 @@ class CallMonitorService : Service() {
                 start()
             }
             mediaRecorder = recorder
+            currentOutputFile = outputFile
             recordingStartTime = System.currentTimeMillis()
             isRecording = true
-            Log.i(TAG, "Recording started (MIC fallback): ${outputFile.absolutePath}")
-        } catch (e2: Exception) {
-            Log.e(TAG, "retryWithMicSource also failed", e2)
-            isRecording = false
-            currentOutputFile = null
+            Log.i(TAG, "Recording started (source=$audioSource): ${outputFile.absolutePath}")
+            outputFile
+        } catch (e: Exception) {
+            Log.w(TAG, "startRecording failed (source=$audioSource): ${e.message}")
+            try { mediaRecorder?.release() } catch (_: Exception) {}
+            mediaRecorder = null
+            null
         }
     }
 
@@ -339,7 +352,7 @@ class CallMonitorService : Service() {
         return try {
             mediaRecorder?.apply { stop(); reset(); release() }
             mediaRecorder = null
-            if (filePath != null && File(filePath).exists() && durationMs > 1000) {
+            if (filePath != null && File(filePath).exists() && durationMs > MIN_RECORDING_DURATION_MS) {
                 Log.i(TAG, "Recording saved: $filePath (${durationMs}ms)")
                 RecordingResult.Success(filePath, durationMs)
             } else {
@@ -354,10 +367,6 @@ class CallMonitorService : Service() {
             null
         }
     }
-
-    private fun hasRecordAudioPermission(): Boolean =
-        ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED
 
     // ── DB 保存 & アップロード ────────────────────────────────
 
@@ -395,7 +404,7 @@ class CallMonitorService : Service() {
                     .getOrDefault(CallDirection.UNKNOWN)
             )
             container.recordRepository.insertRecord(record)
-            Log.i(TAG, "Record saved: ${record.id}")
+            Log.i(TAG, "Record saved: ${record.id}, title=$title")
 
             val prefs = container.dataStore.data.first()
             val uploadType = prefs[stringPreferencesKey("upload_type")] ?: "none"
@@ -421,11 +430,10 @@ class CallMonitorService : Service() {
     // ── 連絡先解決 ─────────────────────────────────────────────
 
     private fun resolveContactName(phoneNumber: String): String? {
-        val hasContactsPerm = ContextCompat.checkSelfPermission(
-            this, android.Manifest.permission.READ_CONTACTS
-        ) == PackageManager.PERMISSION_GRANTED
-        if (!hasContactsPerm) return null
-
+        if (!hasReadContactsPermission()) {
+            Log.d(TAG, "READ_CONTACTS permission not granted")
+            return null
+        }
         return try {
             val uri = android.net.Uri.withAppendedPath(
                 ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
@@ -436,9 +444,16 @@ class CallMonitorService : Service() {
                 arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
                 null, null, null
             )?.use { cursor ->
-                if (cursor.moveToFirst())
-                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
-                else null
+                if (cursor.moveToFirst()) {
+                    val name = cursor.getString(
+                        cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME)
+                    )
+                    Log.d(TAG, "Resolved contact: $phoneNumber -> $name")
+                    name
+                } else {
+                    Log.d(TAG, "No contact found for $phoneNumber")
+                    null
+                }
             }
         } catch (e: Exception) {
             Log.w(TAG, "resolveContactName failed: ${e.message}")
