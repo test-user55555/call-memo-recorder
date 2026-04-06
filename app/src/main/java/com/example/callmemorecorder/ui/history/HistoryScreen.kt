@@ -17,7 +17,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.callmemorecorder.domain.model.CallDirection
 import com.example.callmemorecorder.domain.model.RecordItem
-import com.example.callmemorecorder.domain.model.TranscriptionStatus
 import com.example.callmemorecorder.domain.model.UploadStatus
 import com.example.callmemorecorder.util.formatDatetime
 import com.example.callmemorecorder.util.formatDuration
@@ -147,7 +146,14 @@ private fun RecordItemCard(
 
                 // タイトル（相手名または番号）
                 Column(modifier = Modifier.weight(1f)) {
-                    val displayName = record.callerName ?: record.callerNumber
+                    val displayName = record.callerName
+                        ?: record.callerNumber
+                        ?: record.title.ifBlank { null }
+                    val dirLabel = when (record.callDirection) {
+                        CallDirection.INCOMING -> "着信"
+                        CallDirection.OUTGOING -> "発信"
+                        CallDirection.UNKNOWN  -> "通話"
+                    }
                     if (displayName != null) {
                         Text(
                             text = displayName,
@@ -155,11 +161,6 @@ private fun RecordItemCard(
                             fontWeight = FontWeight.Bold,
                             maxLines = 1
                         )
-                    }
-                    val dirLabel = when (record.callDirection) {
-                        CallDirection.INCOMING -> "着信"
-                        CallDirection.OUTGOING -> "発信"
-                        CallDirection.UNKNOWN  -> "通話"
                     }
                     Text(
                         text = "$dirLabel  ${formatDatetime(record.createdAt)}",

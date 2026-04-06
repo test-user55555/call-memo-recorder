@@ -22,6 +22,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
@@ -39,6 +42,18 @@ fun SettingsScreen(
     val ftpsTestResult by viewModel.ftpsTestResult.collectAsStateWithLifecycle()
     val driveTestResult by viewModel.driveTestResult.collectAsStateWithLifecycle()
     val context = LocalContext.current
+
+    // 画面が前面に来るたびに Drive サインイン状態を更新
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshDriveSignInState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // 通話自動録音に必要な権限リスト
     val callPermissions = buildList {
@@ -96,7 +111,7 @@ fun SettingsScreen(
 
                 if (!allGranted) {
                     InfoBox(
-                        text = "通話を自動録音するには「電話」「マイク」「通知」の権限が必要です。",
+                        text = "通話を自動録音するには「電話」「マイク」「連絡先」「通知」の権限が必要です。",
                         isWarning = true
                     )
                     Spacer(Modifier.height(4.dp))
@@ -132,53 +147,30 @@ fun SettingsScreen(
                 }
             }
 
-            // ── アップロード先 ────────────────────────────────
-            SectionCard(title = "自動アップロード") {
-                SwitchRow(
-                    title = "録音後に自動アップロード",
-                    description = "録音完了後、選択した宛先にアップロードします",
-                    checked = settings.autoUpload,
-                    onCheckedChange = { viewModel.setAutoUpload(it) }
-                )
-                if (settings.autoUpload) {
-                    Spacer(Modifier.height(8.dp))
-                    Text("アップロード先", style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
-                    UploadTypeSelector(
-                        selected = settings.uploadType,
-                        onSelect  = { viewModel.setUploadType(it) }
-                    )
-                }
-            }
-
-            // ── Google Drive 設定 ─────────────────────────────
-            if (settings.autoUpload && settings.uploadType == "drive") {
-                SectionCard(title = "Google Drive 設定") {
-                    if (settings.isDriveSignedIn) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Filled.CheckCircle, contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Column {
-                                Text("接続済み", fontWeight = FontWeight.Bold)
-                                Text(settings.driveEmail ?: "", style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Spacer(Modifier.weight(1f))
-                            OutlinedButton(onClick = { viewModel.signOutGoogle() }) {
-                                Text("切断")
-                            }
+            // ── Google Drive 設定（常時表示） ────────────────────
+            SectionCard(title = "Google Drive 設定") {
+                if (settings.isDriveSignedIn) {
+                    // ── サインイン済み ──
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.CheckCircle, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("接続済み", fontWeight = FontWeight.Bold)
+                            Text(
+                                settings.driveEmail ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                    } else {
-                        Button(
-                            onClick = { signInLauncher.launch(viewModel.getGoogleSignInIntent()) },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Filled.AccountCircle, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Google アカウントで接続")
+                        OutlinedButton(onClick = {
+                            viewModel.signOutGoogle()
+                            viewModel.clearDriveTestResult()
+                        }) {
+                            Text("切断")
                         }
                     }
 
@@ -199,9 +191,11 @@ fun SettingsScreen(
 
                     // ── Drive 接続テストボタン ──
                     Button(
-                        onClick = { viewModel.testDriveConnection(settings.driveFolderName) },
-                        modifier = Modifier.fillMaxWidth(),
-                        enabled = settings.isDriveSignedIn
+                        onClick = {
+                            viewModel.clearDriveTestResult()
+                            viewModel.testDriveConnection(settings.driveFolderName)
+                        },
+                        modifier = Modifier.fillMaxWidth()
                     ) {
                         Icon(Icons.Filled.NetworkCheck, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
@@ -213,12 +207,11 @@ fun SettingsScreen(
                         Spacer(Modifier.height(4.dp))
                         Card(
                             colors = CardDefaults.cardColors(
-                                containerColor = if (result.startsWith("✅"))
-                                    MaterialTheme.colorScheme.primaryContainer
-                                else if (result == "テスト中...")
-                                    MaterialTheme.colorScheme.surfaceVariant
-                                else
-                                    MaterialTheme.colorScheme.errorContainer
+                                containerColor = when {
+                                    result.startsWith("✅") -> MaterialTheme.colorScheme.primaryContainer
+                                    result == "テスト中..." -> MaterialTheme.colorScheme.surfaceVariant
+                                    else -> MaterialTheme.colorScheme.errorContainer
+                                }
                             ),
                             modifier = Modifier.fillMaxWidth()
                         ) {
@@ -229,10 +222,49 @@ fun SettingsScreen(
                             )
                         }
                     }
+                } else {
+                    // ── 未サインイン ──
+                    InfoBox(
+                        text = "Google アカウントでサインインすると、録音ファイルを自動的に Google Drive にアップロードできます。",
+                        isWarning = false
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Button(
+                        onClick = { signInLauncher.launch(viewModel.getGoogleSignInIntent()) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.AccountCircle, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Google アカウントで接続")
+                    }
+                }
+            }
 
-                    if (!settings.isDriveSignedIn) {
+            // ── 自動アップロード設定 ──────────────────────────────
+            SectionCard(title = "自動アップロード") {
+                SwitchRow(
+                    title = "録音後に自動アップロード",
+                    description = "録音完了後、選択した宛先にアップロードします",
+                    checked = settings.autoUpload,
+                    onCheckedChange = { viewModel.setAutoUpload(it) }
+                )
+                if (settings.autoUpload) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "アップロード先",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    UploadTypeSelector(
+                        selected = settings.uploadType,
+                        onSelect = { viewModel.setUploadType(it) }
+                    )
+                    if (settings.uploadType == "drive" && !settings.isDriveSignedIn) {
+                        Spacer(Modifier.height(4.dp))
                         InfoBox(
-                            text = "先に「Google アカウントで接続」を行ってからテストしてください",
+                            text = "⚠️ 「Google Drive 設定」でアカウントに接続してください",
                             isWarning = true
                         )
                     }
@@ -262,7 +294,7 @@ fun SettingsScreen(
 
             // ── アプリ情報 ────────────────────────────────────
             SectionCard(title = "アプリ情報") {
-                InfoRow(label = "バージョン", value = "1.1.0")
+                InfoRow(label = "バージョン", value = "1.2.0")
                 InfoRow(label = "ビルドタイプ", value = "DEBUG")
             }
         }
@@ -282,9 +314,7 @@ private fun UploadTypeSelector(selected: String, onSelect: (String) -> Unit) {
                 onClick = { onSelect(key) },
                 modifier = Modifier.fillMaxWidth(),
                 border = if (selected == key)
-                    CardDefaults.outlinedCardBorder().copy(
-                        width = 2.dp
-                    )
+                    CardDefaults.outlinedCardBorder().copy(width = 2.dp)
                 else CardDefaults.outlinedCardBorder()
             ) {
                 Row(

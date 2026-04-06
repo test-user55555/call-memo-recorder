@@ -93,14 +93,27 @@ class SettingsViewModel(
     // Google Sign-In 成功後の処理
     fun onGoogleSignInSuccess() {
         viewModelScope.launch {
-            dataStore.edit { } // 再評価トリガー
+            // GoogleSignIn.getLastSignedInAccount() のキャッシュが更新されるまで少し待つ
+            kotlinx.coroutines.delay(300)
+            dataStore.edit { } // Flow再評価トリガー
         }
     }
 
     // Google Sign-Out
     fun signOutGoogle() = viewModelScope.launch {
         driveRepository.signOut()
+        kotlinx.coroutines.delay(300)
         dataStore.edit { }
+    }
+
+    /**
+     * 設定画面表示時 (onResume相当) に Drive サインイン状態を強制再評価。
+     * GoogleSignIn.getLastSignedInAccount() のキャッシュ更新後に呼ぶ。
+     */
+    fun refreshDriveSignInState() {
+        viewModelScope.launch {
+            dataStore.edit { }
+        }
     }
 
     /** Drive 接続テスト: 指定フォルダに "接続テスト.txt" をアップロード */
