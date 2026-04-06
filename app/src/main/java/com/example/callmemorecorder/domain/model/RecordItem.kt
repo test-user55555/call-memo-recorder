@@ -1,40 +1,18 @@
 package com.example.callmemorecorder.domain.model
 
-/**
- * Recording status enum
- */
-enum class RecordingStatus {
-    IDLE,
-    RECORDING,
-    SAVED,
-    FAILED
-}
+/** 録音ステータス */
+enum class RecordingStatus { IDLE, RECORDING, SAVED, FAILED }
 
-/**
- * Upload status enum
- */
-enum class UploadStatus {
-    NOT_STARTED,
-    QUEUED,
-    UPLOADING,
-    UPLOADED,
-    ERROR
-}
+/** アップロードステータス */
+enum class UploadStatus { NOT_STARTED, QUEUED, UPLOADING, UPLOADED, ERROR }
 
-/**
- * Transcription status enum
- */
-enum class TranscriptionStatus {
-    NOT_STARTED,
-    QUEUED,
-    PROCESSING,
-    COMPLETED,
-    ERROR
-}
+/** 文字起こしステータス */
+enum class TranscriptionStatus { NOT_STARTED, QUEUED, PROCESSING, COMPLETED, ERROR }
 
-/**
- * Domain model for a recording record
- */
+/** 発着信方向 */
+enum class CallDirection { INCOMING, OUTGOING, UNKNOWN }
+
+/** 録音レコードのドメインモデル */
 data class RecordItem(
     val id: String,
     val title: String,
@@ -49,5 +27,9 @@ data class RecordItem(
     val driveWebLink: String?,
     val transcriptText: String?,
     val errorMessage: String?,
-    val updatedAt: Long
+    val updatedAt: Long,
+    // 通話情報
+    val callerNumber: String? = null,   // 電話番号
+    val callerName: String? = null,     // 連絡先名（取得できた場合）
+    val callDirection: CallDirection = CallDirection.UNKNOWN
 )

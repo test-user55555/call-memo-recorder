@@ -83,14 +83,17 @@ class SettingsViewModel(
     private val _ftpsTestResult = MutableStateFlow<String?>(null)
     val ftpsTestResult: StateFlow<String?> = _ftpsTestResult.asStateFlow()
 
+    // Drive接続テスト結果
+    private val _driveTestResult = MutableStateFlow<String?>(null)
+    val driveTestResult: StateFlow<String?> = _driveTestResult.asStateFlow()
+
     // Google Sign-Inのインテントを提供
     fun getGoogleSignInIntent(): Intent = driveRepository.getSignInIntent()
 
     // Google Sign-In 成功後の処理
     fun onGoogleSignInSuccess() {
-        // StateFlow を再評価させるため空更新
         viewModelScope.launch {
-            dataStore.edit { } // no-op to trigger recompose
+            dataStore.edit { } // 再評価トリガー
         }
     }
 
@@ -99,6 +102,20 @@ class SettingsViewModel(
         driveRepository.signOut()
         dataStore.edit { }
     }
+
+    /** Drive 接続テスト: 指定フォルダに "接続テスト.txt" をアップロード */
+    fun testDriveConnection(folderName: String) {
+        viewModelScope.launch {
+            _driveTestResult.value = "テスト中..."
+            val result = driveRepository.testConnection(folderName)
+            _driveTestResult.value = if (result == null)
+                "✅ 接続成功！「$folderName」フォルダに「接続テスト.txt」を作成しました"
+            else
+                "❌ $result"
+        }
+    }
+
+    fun clearDriveTestResult() { _driveTestResult.value = null }
 
     // ── 設定保存メソッド群 ──────────────────────────────────
 

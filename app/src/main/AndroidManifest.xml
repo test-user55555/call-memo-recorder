@@ -20,6 +20,9 @@
     <!-- 通話状態の検知 (自動録音に必要) -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
+    <!-- 連絡先アクセス (通話相手の名前表示に使用) -->
+    <uses-permission android:name="android.permission.READ_CONTACTS" />
+
     <!-- ウェイクロック (バックグラウンド録音) -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 

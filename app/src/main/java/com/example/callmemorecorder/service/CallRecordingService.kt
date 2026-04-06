@@ -23,7 +23,8 @@ import java.util.*
 
 /**
  * 通話連動の録音管理サービス。
- * CallStateReceiver から電話状態を受け取り、自動で録音開始・停止・アップロードを行う。
+ * CallMonitorService から電話状態・番号・方向を受け取り、
+ * 自動で録音開始・停止・アップロードを行う。
  */
 class CallRecordingService : Service() {
 
@@ -32,8 +33,7 @@ class CallRecordingService : Service() {
         const val NOTIFICATION_ID = 2001
         const val CHANNEL_ID = "call_recording_channel"
 
-        @Volatile
-        var isRecording = false
+        @Volatile var isRecording = false
     }
 
     private val container get() = (application as CallMemoApp).container
@@ -42,11 +42,15 @@ class CallRecordingService : Service() {
     private var recordingService: RecordingService? = null
     private var isBound = false
 
+    // 通話情報
+    private var phoneNumber: String? = null
+    private var callerName: String? = null
+    private var direction: String = "UNKNOWN"
+
     private val connection = object : android.content.ServiceConnection {
         override fun onServiceConnected(name: android.content.ComponentName?, binder: IBinder?) {
             recordingService = (binder as RecordingService.RecordingBinder).getService()
             isBound = true
-            Log.d(TAG, "RecordingService connected")
         }
         override fun onServiceDisconnected(name: android.content.ComponentName?) {
             recordingService = null
@@ -63,11 +67,17 @@ class CallRecordingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val state = intent?.action ?: return START_NOT_STICKY
-        Log.d(TAG, "Phone state: $state")
+
+        // 通話情報を取得（CallMonitorService から渡される）
+        phoneNumber = intent.getStringExtra(CallMonitorService.EXTRA_PHONE_NUMBER)
+        callerName  = intent.getStringExtra(CallMonitorService.EXTRA_CALLER_NAME)
+        direction   = intent.getStringExtra(CallMonitorService.EXTRA_DIRECTION) ?: "UNKNOWN"
+
+        Log.d(TAG, "Phone state: $state, num=$phoneNumber, name=$callerName, dir=$direction")
         when (state) {
             TelephonyManager.EXTRA_STATE_OFFHOOK -> handleCallStarted()
-            TelephonyManager.EXTRA_STATE_IDLE     -> handleCallEnded()
-            TelephonyManager.EXTRA_STATE_RINGING  -> Log.d(TAG, "Ringing - waiting")
+            TelephonyManager.EXTRA_STATE_IDLE    -> handleCallEnded()
+            TelephonyManager.EXTRA_STATE_RINGING -> Log.d(TAG, "Ringing - waiting")
         }
         return START_NOT_STICKY
     }
@@ -78,10 +88,13 @@ class CallRecordingService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification("通話録音中..."))
 
         serviceScope.launch {
-            delay(800L) // 通話確立を待つ
+            delay(800L)
             withContext(Dispatchers.Main) {
                 if (!isBound) {
-                    bindService(Intent(this@CallRecordingService, RecordingService::class.java), connection, Context.BIND_AUTO_CREATE)
+                    bindService(
+                        Intent(this@CallRecordingService, RecordingService::class.java),
+                        connection, Context.BIND_AUTO_CREATE
+                    )
                     delay(500L)
                 }
                 recordingService?.startRecording()
@@ -99,7 +112,10 @@ class CallRecordingService : Service() {
                 val result = recordingService?.stopRecording()
                 isRecording = false
                 when (result) {
-                    is RecordingResult.Success -> saveAndUpload(result.filePath, result.durationMs)
+                    is RecordingResult.Success -> saveAndUpload(
+                        result.filePath, result.durationMs,
+                        phoneNumber, callerName, direction
+                    )
                     is RecordingResult.Failure -> Log.e(TAG, "Recording failed: ${result.reason}")
                     null -> Log.w(TAG, "No recording result")
                 }
@@ -109,10 +125,20 @@ class CallRecordingService : Service() {
         }
     }
 
-    private suspend fun saveAndUpload(filePath: String, durationMs: Long) {
+    private suspend fun saveAndUpload(
+        filePath: String,
+        durationMs: Long,
+        number: String?,
+        name: String?,
+        direction: String
+    ) {
         try {
             val fileName = File(filePath).name
-            val title = "通話録音_${SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date())}"
+            val dateStr = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date())
+            val dirLabel = if (direction == "INCOMING") "着信" else if (direction == "OUTGOING") "発信" else "通話"
+            val displayName = name ?: number ?: "不明"
+            val title = "${dirLabel}_${displayName}_${dateStr}"
+
             val record = RecordItem(
                 id = UUID.randomUUID().toString(),
                 title = title,
@@ -125,17 +151,18 @@ class CallRecordingService : Service() {
                 transcriptionStatus = TranscriptionStatus.NOT_STARTED,
                 driveFileId = null, driveWebLink = null,
                 transcriptText = null, errorMessage = null,
-                updatedAt = System.currentTimeMillis()
+                updatedAt = System.currentTimeMillis(),
+                callerNumber = number,
+                callerName = name,
+                callDirection = runCatching { CallDirection.valueOf(direction) }
+                    .getOrDefault(CallDirection.UNKNOWN)
             )
             withContext(Dispatchers.IO) { container.recordRepository.insertRecord(record) }
 
-            // 自動アップロード判定
             val prefs = container.dataStore.data.first()
             val uploadType = prefs[stringPreferencesKey("upload_type")] ?: "none"
             val autoUpload = prefs[booleanPreferencesKey("auto_upload")] ?: false
-
             if (autoUpload && uploadType != "none") {
-                Log.i(TAG, "Auto upload queued (type=$uploadType)")
                 val req = UploadWorker.buildWorkRequest(record.id, filePath, fileName)
                 WorkManager.getInstance(applicationContext).enqueue(req)
             }

@@ -14,5 +14,9 @@ data class RecordEntity(
     val driveWebLink: String? = null,
     val transcriptText: String? = null,
     val errorMessage: String? = null,
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    // 通話情報（DB v2 で追加）
+    val callerNumber: String? = null,
+    val callerName: String? = null,
+    val callDirection: String = "UNKNOWN"   // INCOMING / OUTGOING / UNKNOWN
 )

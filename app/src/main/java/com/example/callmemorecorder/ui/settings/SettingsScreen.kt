@@ -37,12 +37,14 @@ fun SettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val ftpsTestResult by viewModel.ftpsTestResult.collectAsStateWithLifecycle()
+    val driveTestResult by viewModel.driveTestResult.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     // 通話自動録音に必要な権限リスト
     val callPermissions = buildList {
         add(Manifest.permission.READ_PHONE_STATE)
         add(Manifest.permission.RECORD_AUDIO)
+        add(Manifest.permission.READ_CONTACTS)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -192,6 +194,48 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+
+                    Spacer(Modifier.height(8.dp))
+
+                    // ── Drive 接続テストボタン ──
+                    Button(
+                        onClick = { viewModel.testDriveConnection(settings.driveFolderName) },
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = settings.isDriveSignedIn
+                    ) {
+                        Icon(Icons.Filled.NetworkCheck, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("接続テスト（テストファイルをアップロード）")
+                    }
+
+                    // テスト結果表示
+                    driveTestResult?.let { result ->
+                        Spacer(Modifier.height(4.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (result.startsWith("✅"))
+                                    MaterialTheme.colorScheme.primaryContainer
+                                else if (result == "テスト中...")
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                else
+                                    MaterialTheme.colorScheme.errorContainer
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = result,
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+
+                    if (!settings.isDriveSignedIn) {
+                        InfoBox(
+                            text = "先に「Google アカウントで接続」を行ってからテストしてください",
+                            isWarning = true
+                        )
+                    }
                 }
             }
 

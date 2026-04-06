@@ -9,7 +9,7 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(
 ) {
     companion object {
         const val DATABASE_NAME = "call_memo_recorder_db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 2   // v1→v2: callerNumber/callerName/callDirection 追加
 
         const val TABLE_RECORDS = "records"
         const val COL_ID = "id"
@@ -26,6 +26,10 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(
         const val COL_TRANSCRIPT_TEXT = "transcriptText"
         const val COL_ERROR_MESSAGE = "errorMessage"
         const val COL_UPDATED_AT = "updatedAt"
+        // v2 追加列
+        const val COL_CALLER_NUMBER = "callerNumber"
+        const val COL_CALLER_NAME = "callerName"
+        const val COL_CALL_DIRECTION = "callDirection"
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -44,13 +48,20 @@ class AppDatabase(context: Context) : SQLiteOpenHelper(
                 $COL_DRIVE_WEB_LINK TEXT,
                 $COL_TRANSCRIPT_TEXT TEXT,
                 $COL_ERROR_MESSAGE TEXT,
-                $COL_UPDATED_AT INTEGER NOT NULL
+                $COL_UPDATED_AT INTEGER NOT NULL,
+                $COL_CALLER_NUMBER TEXT,
+                $COL_CALLER_NAME TEXT,
+                $COL_CALL_DIRECTION TEXT NOT NULL DEFAULT 'UNKNOWN'
             )
         """.trimIndent())
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        db.execSQL("DROP TABLE IF EXISTS $TABLE_RECORDS")
-        onCreate(db)
+        if (oldVersion < 2) {
+            // v1 → v2: 通話情報カラムを追加（既存データを保持）
+            db.execSQL("ALTER TABLE $TABLE_RECORDS ADD COLUMN $COL_CALLER_NUMBER TEXT")
+            db.execSQL("ALTER TABLE $TABLE_RECORDS ADD COLUMN $COL_CALLER_NAME TEXT")
+            db.execSQL("ALTER TABLE $TABLE_RECORDS ADD COLUMN $COL_CALL_DIRECTION TEXT NOT NULL DEFAULT 'UNKNOWN'")
+        }
     }
 }
