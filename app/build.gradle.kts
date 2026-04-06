@@ -72,7 +72,7 @@ android {
 
     // Kotlin 2.0+ uses compose compiler gradle plugin, no need to set kotlinCompilerExtensionVersion here
 
-    packagingOptions {
+    packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "/META-INF/DEPENDENCIES"

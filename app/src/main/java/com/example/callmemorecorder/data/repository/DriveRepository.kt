@@ -73,7 +73,7 @@ class DriveRepository(private val context: Context) {
         val credential = GoogleAccountCredential.usingOAuth2(
             context, listOf(DriveScopes.DRIVE_FILE)
         ).apply {
-            selectedAccount = Account(account.email, "com.google")
+            selectedAccount = Account(account.email ?: "", "com.google")
         }
         return Drive.Builder(
             NetHttpTransport(),
