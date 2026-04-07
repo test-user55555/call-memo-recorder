@@ -103,7 +103,7 @@ class DriveRepository(private val context: Context) {
             return@withContext last
         }
         // silentSignIn は非同期 Task なので coroutine で待機
-        return@withContext suspendCancellableCoroutine { cont ->
+        return@withContext suspendCancellableCoroutine<GoogleSignInAccount?> { cont ->
             getSignInClient().silentSignIn()
                 .addOnSuccessListener { account ->
                     cachedAccount = account
