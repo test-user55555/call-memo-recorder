@@ -45,20 +45,37 @@ jobs:
           rm -rf ~/.gradle/caches/transforms-* || true
           echo "Cleaned transform caches"
 
+      - name: Extract version name
+        id: version
+        run: |
+          VERSION_NAME=$(grep 'versionName' app/build.gradle.kts | head -1 | sed 's/.*versionName\s*=\s*"\(.*\)".*/\1/')
+          VERSION_CODE=$(grep 'versionCode' app/build.gradle.kts | head -1 | sed 's/.*versionCode\s*=\s*\([0-9]*\).*/\1/')
+          echo "version_name=${VERSION_NAME}" >> $GITHUB_OUTPUT
+          echo "version_code=${VERSION_CODE}" >> $GITHUB_OUTPUT
+          echo "APK version: ${VERSION_NAME} (${VERSION_CODE})"
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug --no-daemon --max-workers=2 --build-cache
         env:
           GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m"
 
+      - name: Rename APK with version
+        run: |
+          VERSION="${{ steps.version.outputs.version_name }}"
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             app/build/outputs/apk/debug/CallMemoRecorder-v${VERSION}-debug.apk
+          echo "Renamed to CallMemoRecorder-v${VERSION}-debug.apk"
+
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug
+          path: app/build/outputs/apk/debug/CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug.apk
           retention-days: 30
 
       - name: Show APK info
         run: |
           echo "=== APK Build Summary ==="
-          ls -lh app/build/outputs/apk/debug/app-debug.apk
-          echo "SHA256: $(sha256sum app/build/outputs/apk/debug/app-debug.apk)"
+          echo "Version: ${{ steps.version.outputs.version_name }} (code: ${{ steps.version.outputs.version_code }})"
+          ls -lh app/build/outputs/apk/debug/CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug.apk
+          echo "SHA256: $(sha256sum app/build/outputs/apk/debug/CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug.apk)"

@@ -43,6 +43,10 @@ class DriveRepository(private val context: Context) {
 
     val isEnabled: Boolean = true
 
+    // サインイン成功時にアカウントをキャッシュする（getLastSignedInAccountのキャッシュ遅延を回避）
+    @Volatile
+    private var cachedAccount: GoogleSignInAccount? = null
+
     fun getSignInClient(): GoogleSignInClient {
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
@@ -55,17 +59,28 @@ class DriveRepository(private val context: Context) {
 
     /**
      * Google アカウントにサインイン済みかつ email が取得できているかで判定。
-     * 実際の Drive アクセス権は testConnection() で確認できる。
+     * cachedAccount を優先し、なければ getLastSignedInAccount を確認する。
      */
     fun isSignedIn(): Boolean {
+        if (cachedAccount?.email != null) return true
         val account = GoogleSignIn.getLastSignedInAccount(context) ?: return false
         return account.email != null
     }
 
     fun getSignedInEmail(): String? =
-        GoogleSignIn.getLastSignedInAccount(context)?.email
+        cachedAccount?.email ?: GoogleSignIn.getLastSignedInAccount(context)?.email
+
+    /**
+     * サインイン成功時にアカウントをキャッシュする。
+     * SettingsViewModel から呼び出される。
+     */
+    fun cacheSignedInAccount(account: GoogleSignInAccount) {
+        cachedAccount = account
+        Log.i(TAG, "cacheSignedInAccount: ${account.email}")
+    }
 
     suspend fun signOut() = withContext(Dispatchers.IO) {
+        cachedAccount = null
         try { getSignInClient().signOut() } catch (e: Exception) { Log.e(TAG, "signOut: ${e.message}") }
     }
 
@@ -84,10 +99,13 @@ class DriveRepository(private val context: Context) {
 
     /**
      * 接続テスト: 指定フォルダに "接続テスト.txt" をアップロードする。
+     * cachedAccount を優先し、なければ getLastSignedInAccount にフォールバック。
      * @return null = 成功, エラーメッセージ文字列 = 失敗
      */
     suspend fun testConnection(folderName: String): String? = withContext(Dispatchers.IO) {
-        val account = GoogleSignIn.getLastSignedInAccount(context)
+        // cachedAccount を優先（getLastSignedInAccount のキャッシュ遅延を回避）
+        val account = cachedAccount
+            ?: GoogleSignIn.getLastSignedInAccount(context)
             ?: return@withContext "Google アカウントにサインインしていません"
         if (account.email == null)
             return@withContext "アカウントのメールアドレスが取得できません"
@@ -137,7 +155,9 @@ class DriveRepository(private val context: Context) {
 
     suspend fun uploadFile(file: File, folderName: String = "CallMemoRecorder"): Pair<String, String>? =
         withContext(Dispatchers.IO) {
-            val account = GoogleSignIn.getLastSignedInAccount(context) ?: return@withContext null
+            // cachedAccount を優先
+            val account = cachedAccount
+                ?: GoogleSignIn.getLastSignedInAccount(context) ?: return@withContext null
             try {
                 val drive = getDriveService(account)
                 val folderId = getOrCreateFolder(drive, folderName)
@@ -171,7 +191,8 @@ class DriveRepository(private val context: Context) {
     }
 
     suspend fun getWebLink(driveFileId: String): String? = withContext(Dispatchers.IO) {
-        val account = GoogleSignIn.getLastSignedInAccount(context) ?: return@withContext null
+        val account = cachedAccount
+            ?: GoogleSignIn.getLastSignedInAccount(context) ?: return@withContext null
         try {
             getDriveService(account).files().get(driveFileId).setFields("webViewLink").execute().webViewLink
         } catch (e: Exception) { null }

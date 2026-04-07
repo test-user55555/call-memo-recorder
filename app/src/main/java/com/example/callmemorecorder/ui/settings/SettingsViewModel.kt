@@ -9,9 +9,9 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.callmemorecorder.data.AppContainer
 import com.example.callmemorecorder.data.repository.DriveRepository
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.example.callmemorecorder.data.repository.FtpsConfig
 import com.example.callmemorecorder.data.repository.FtpsRepository
-import com.example.callmemorecorder.service.CallMonitorService
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -106,7 +106,11 @@ class SettingsViewModel(
 
     // Google Sign-In 成功後の処理
     // account: SignInランチャーから直接受け取った GoogleSignInAccount
-    fun onGoogleSignInSuccess(email: String?) {
+    fun onGoogleSignInSuccess(account: GoogleSignInAccount?, email: String?) {
+        // DriveRepository にアカウントをキャッシュさせる（testConnection で利用）
+        if (account != null) {
+            driveRepository.cacheSignedInAccount(account)
+        }
         _driveSignedIn.value = true
         _driveEmail.value = email
     }

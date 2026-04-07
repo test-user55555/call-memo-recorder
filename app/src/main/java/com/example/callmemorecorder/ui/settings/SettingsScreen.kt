@@ -76,9 +76,9 @@ fun SettingsScreen(
             try {
                 val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
                 val account = task.getResult(ApiException::class.java)
-                // account から直接 email を取得して ViewModel に渡す
-                // → getLastSignedInAccount() キャッシュ遅延の問題を回避
-                viewModel.onGoogleSignInSuccess(account.email)
+                // account オブジェクトと email を両方渡す
+                // → DriveRepository に account をキャッシュし、getLastSignedInAccount() 遅延を完全回避
+                viewModel.onGoogleSignInSuccess(account, account.email)
                 Toast.makeText(context, "Google アカウントに接続しました", Toast.LENGTH_SHORT).show()
             } catch (e: ApiException) {
                 Toast.makeText(context, "サインイン失敗: ${e.statusCode}", Toast.LENGTH_SHORT).show()
@@ -374,7 +374,7 @@ fun SettingsScreen(
 
             // ── アプリ情報 ────────────────────────────────────
             SectionCard(title = "アプリ情報") {
-                InfoRow(label = "バージョン", value = "1.3.3")
+                InfoRow(label = "バージョン", value = "1.3.4")
                 InfoRow(label = "ビルドタイプ", value = "DEBUG")
             }
         }

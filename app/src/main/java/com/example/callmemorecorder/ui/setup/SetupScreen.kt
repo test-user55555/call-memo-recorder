@@ -1,7 +1,10 @@
 package com.example.callmemorecorder.ui.setup
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -11,30 +14,57 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.callmemorecorder.ui.settings.SettingsViewModel
-import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.isGranted
-import com.google.accompanist.permissions.rememberPermissionState
 
-@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun SetupScreen(
     onSetupComplete: () -> Unit,
     viewModel: SettingsViewModel
 ) {
+    val context = LocalContext.current
     var agreed = remember { mutableStateOf(false) }
 
-    // 各権限の状態
-    val micPermission = rememberPermissionState(android.Manifest.permission.RECORD_AUDIO)
-    val contactsPermission = rememberPermissionState(android.Manifest.permission.READ_CONTACTS)
-    val notificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        rememberPermissionState(Manifest.permission.POST_NOTIFICATIONS)
-    } else null
+    // 各権限の許可状態（再コンポーズ時に再チェックできるよう mutableState を使用）
+    var micGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var contactsGranted by remember {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
+                PackageManager.PERMISSION_GRANTED
+        )
+    }
+    var notifGranted by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+            } else true // API 33 未満は通知権限不要
+        )
+    }
+
+    // ActivityResultLauncher で各権限を個別リクエスト
+    val micLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> micGranted = granted }
+
+    val contactsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> contactsGranted = granted }
+
+    val notifLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> notifGranted = granted }
 
     // 必須権限（マイク）が許可されているか
-    val canProceed = agreed.value && micPermission.status.isGranted
+    val canProceed = agreed.value && micGranted
 
     Column(
         modifier = Modifier
@@ -105,28 +135,28 @@ fun SetupScreen(
                 PermissionRow(
                     title = "マイク権限",
                     description = "音声録音に必要です",
-                    isGranted = micPermission.status.isGranted,
+                    isGranted = micGranted,
                     isRequired = true,
-                    onRequest = { micPermission.launchPermissionRequest() }
+                    onRequest = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) }
                 )
 
                 // 連絡先権限
                 PermissionRow(
                     title = "連絡先へのアクセス",
                     description = "録音履歴に通話相手の名前を表示するために使用します",
-                    isGranted = contactsPermission.status.isGranted,
+                    isGranted = contactsGranted,
                     isRequired = false,
-                    onRequest = { contactsPermission.launchPermissionRequest() }
+                    onRequest = { contactsLauncher.launch(Manifest.permission.READ_CONTACTS) }
                 )
 
                 // 通知権限（Android 13+）
-                if (notificationPermission != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     PermissionRow(
                         title = "通知権限",
                         description = "録音中・通話監視中の通知表示に必要です",
-                        isGranted = notificationPermission.status.isGranted,
+                        isGranted = notifGranted,
                         isRequired = false,
-                        onRequest = { notificationPermission.launchPermissionRequest() }
+                        onRequest = { notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
                     )
                 }
             }
@@ -177,7 +207,7 @@ fun SetupScreen(
         }
 
         // マイク権限が未許可の場合の警告
-        if (!micPermission.status.isGranted) {
+        if (!micGranted) {
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
