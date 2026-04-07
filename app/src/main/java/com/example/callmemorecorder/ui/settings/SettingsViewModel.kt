@@ -105,16 +105,10 @@ class SettingsViewModel(
     fun getGoogleSignInIntent(): Intent = driveRepository.getSignInIntent()
 
     // Google Sign-In 成功後の処理
-    fun onGoogleSignInSuccess() {
-        viewModelScope.launch {
-            // GoogleSignIn のキャッシュ更新を待つ（Main スレッドで確認する必要あり）
-            kotlinx.coroutines.delay(800)
-            val (signedIn, email) = withContext(Dispatchers.Main) {
-                Pair(driveRepository.isSignedIn(), driveRepository.getSignedInEmail())
-            }
-            _driveSignedIn.value = signedIn
-            _driveEmail.value = email
-        }
+    // account: SignInランチャーから直接受け取った GoogleSignInAccount
+    fun onGoogleSignInSuccess(email: String?) {
+        _driveSignedIn.value = true
+        _driveEmail.value = email
     }
 
     // Google Sign-Out
