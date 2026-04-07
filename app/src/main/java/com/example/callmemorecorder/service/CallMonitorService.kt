@@ -284,7 +284,6 @@ class CallMonitorService : Service() {
 
     // ── 録音制御 ─────────────────────────────────────────────
 
-    @Synchronized
     private suspend fun startRecordingWithSource() {
         if (isRecording) return
         if (!hasRecordAudioPermission()) {
