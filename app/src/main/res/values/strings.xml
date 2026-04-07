@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name">Call Memo Recorder</string>
+    <string name="accessibility_service_description">通話中の音声を録音するためにユーザー補助サービスを使用します。通話の開始・終了を検知して自動録音を行います。</string>
     <string name="recording_notification_channel_name">Recording</string>
     <string name="recording_notification_channel_description">Shows recording status</string>
     <string name="recording_notification_title">Recording in progress</string>

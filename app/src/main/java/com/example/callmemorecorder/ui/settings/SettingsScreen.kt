@@ -2,7 +2,9 @@ package com.example.callmemorecorder.ui.settings
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.os.Build
+import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -12,7 +14,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*import androidx.compose.runtime.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,6 +28,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.callmemorecorder.service.CallRecordingAccessibilityService
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.google.android.gms.auth.api.signin.GoogleSignIn
@@ -138,6 +142,43 @@ fun SettingsScreen(
                         text = "📌 通知バーに「通話を監視中」が表示されている間、着信を自動検知します",
                         isWarning = false
                     )
+                }
+            }
+
+            // ── ユーザー補助サービス設定 ──────────────────────────
+            SectionCard(title = "ユーザー補助サービス（通話録音強化）") {
+                val a11yRunning = CallRecordingAccessibilityService.isServiceRunning
+                if (a11yRunning) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.CheckCircle, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text("ユーザー補助サービス: 有効", fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary)
+                    }
+                } else {
+                    InfoBox(
+                        text = "ユーザー補助サービスを有効にすると、通話中の音声録音精度が向上します。" +
+                               "\n以下のボタンから「設定 → ユーザー補助 → Call Memo Recorder」をONにしてください。",
+                        isWarning = false
+                    )
+                }
+                Spacer(Modifier.height(4.dp))
+                OutlinedButton(
+                    onClick = {
+                        context.startActivity(
+                            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Filled.Accessibility, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("ユーザー補助サービスの設定を開く")
                 }
             }
 

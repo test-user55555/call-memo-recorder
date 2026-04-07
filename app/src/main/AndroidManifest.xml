@@ -7,6 +7,7 @@
 
     <!-- フォアグラウンドサービス -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- FOREGROUND_SERVICE_MICROPHONE は API 34+ で必要。targetSdk=28 では不要だが宣言しても無害 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <!-- ネットワーク -->
@@ -19,7 +20,7 @@
     <!-- 通話状態の検知 (自動録音に必要) -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
 
-    <!-- 発信番号の取得 (Android 9 以下。Android 10+ は非推奨だが互換のため残す) -->
+    <!-- 発信番号の取得 (Android 9 以下) -->
     <uses-permission
         android:name="android.permission.PROCESS_OUTGOING_CALLS"
         android:maxSdkVersion="28" />
@@ -32,6 +33,20 @@
 
     <!-- 端末起動時にサービスを自動起動 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!--
+        ユーザー補助サービスのバインド権限。
+        AccessibilityService の利用に必要。
+    -->
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
+
+    <!--
+        通話音声キャプチャ権限。
+        通常の署名では実行時に付与されないが、宣言することで
+        一部の端末/カスタムROM で有効になる場合がある。
+        targetSdk=28 ではシステムパーミッション扱い。
+    -->
+    <uses-permission android:name="android.permission.CAPTURE_AUDIO_OUTPUT" />
 
     <uses-feature
         android:name="android.hardware.microphone"
@@ -67,7 +82,7 @@
             android:foregroundServiceType="microphone" />
 
         <!--
-            通話連動録音サービス: 録音本体。
+            通話連動録音サービス (TelephonyManager ベース)。
             CallMonitorService / CallStateReceiver から呼ばれる。
         -->
         <service
@@ -77,8 +92,6 @@
 
         <!--
             常駐監視サービス: TelephonyManager で通話状態を監視し録音も行う。
-            foregroundServiceType="microphone" のみ使用。
-            phoneCall タイプは Android 14+ で MANAGE_OWN_CALLS 権限が必要なため使用しない。
             START_STICKY により OS に強制停止されても自動再起動。
         -->
         <service
@@ -86,6 +99,25 @@
             android:exported="false"
             android:foregroundServiceType="microphone"
             android:stopWithTask="false" />
+
+        <!--
+            ユーザー補助サービスを利用した通話録音サービス。
+            - BIND_ACCESSIBILITY_SERVICE 権限が必要
+            - 設定 → ユーザー補助 → Call Memo Recorder → ON にすること
+            - android:permission により BIND_ACCESSIBILITY_SERVICE のみバインド可能
+        -->
+        <service
+            android:name=".service.CallRecordingAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
 
         <!--
             通話状態 BroadcastReceiver。

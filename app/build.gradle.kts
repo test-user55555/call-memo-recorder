@@ -20,8 +20,8 @@ android {
 
     defaultConfig {
         applicationId = "com.example.callmemorecorder"
-        minSdk = 29
-        targetSdk = 36
+        minSdk = 28
+        targetSdk = 28
         versionCode = 3
         versionName = "1.3.0"
 
