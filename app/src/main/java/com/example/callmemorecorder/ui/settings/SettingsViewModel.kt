@@ -9,10 +9,10 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.callmemorecorder.data.AppContainer
 import com.example.callmemorecorder.data.repository.DriveRepository
-import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.example.callmemorecorder.data.repository.FtpsConfig
 import com.example.callmemorecorder.data.repository.FtpsRepository
 import com.example.callmemorecorder.service.CallMonitorService
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -26,23 +26,16 @@ class SettingsViewModel(
 ) : ViewModel() {
 
     companion object {
-        // 共通
         val KEY_AUTO_UPLOAD          = booleanPreferencesKey("auto_upload")
-        val KEY_UPLOAD_TYPE          = stringPreferencesKey("upload_type")       // "drive" / "ftps" / "none"
+        val KEY_UPLOAD_TYPE          = stringPreferencesKey("upload_type")
         val KEY_AUTO_TRANSCRIBE      = booleanPreferencesKey("auto_transcribe")
         val KEY_DELETE_AFTER_UPLOAD  = booleanPreferencesKey("delete_after_upload")
         val KEY_EXPERIMENTAL         = booleanPreferencesKey("experimental_features")
         val KEY_SETUP_COMPLETED      = booleanPreferencesKey("setup_completed")
         val KEY_AUTO_RECORD_CALL     = booleanPreferencesKey("auto_record_call")
-        val KEY_AUTO_START_ON_BOOT    = booleanPreferencesKey("auto_start_on_boot")
-
-        // Drive
+        val KEY_AUTO_START_ON_BOOT   = booleanPreferencesKey("auto_start_on_boot")
         val KEY_DRIVE_FOLDER_NAME    = stringPreferencesKey("drive_folder_name")
-
-        // 録音ソース
-        val KEY_AUDIO_SOURCE         = stringPreferencesKey("audio_source")  // "VOICE_COMMUNICATION" / "MIC" / "VOICE_DOWNLINK"
-
-        // FTPS
+        val KEY_AUDIO_SOURCE         = stringPreferencesKey("audio_source")
         val KEY_FTPS_HOST            = stringPreferencesKey("ftps_host")
         val KEY_FTPS_PORT            = intPreferencesKey("ftps_port")
         val KEY_FTPS_USERNAME        = stringPreferencesKey("ftps_username")
@@ -61,136 +54,125 @@ class SettingsViewModel(
         }
     }
 
-    // Drive サインイン状態を保持する MutableStateFlow（refreshDriveSignInState() で更新）
+    // ─────────────────────────────────────────────────────────────────────
+    // Drive サインイン状態: settings StateFlow とは完全に独立した StateFlow
+    // combine() のパイプラインを経由しないため、value 代入が即座に UI に反映される
+    // ─────────────────────────────────────────────────────────────────────
     private val _driveSignedIn = MutableStateFlow(driveRepository.isSignedIn())
-    private val _driveEmail = MutableStateFlow(driveRepository.getSignedInEmail())
+    private val _driveEmail    = MutableStateFlow(driveRepository.getSignedInEmail())
 
-    // 設定値のFlow
-    val settings: StateFlow<SettingsState> = combine(
-        dataStore.data.catch { emit(emptyPreferences()) },
-        _driveSignedIn,
-        _driveEmail
-    ) { prefs, signedIn, email ->
-        SettingsState(
-            audioSource       = prefs[KEY_AUDIO_SOURCE]            ?: "VOICE_COMMUNICATION",
-            autoRecordCall    = prefs[KEY_AUTO_RECORD_CALL]        ?: false,
-            autoStartOnBoot   = prefs[KEY_AUTO_START_ON_BOOT]      ?: true,
-            autoUpload        = prefs[KEY_AUTO_UPLOAD]             ?: false,
-            uploadType        = prefs[KEY_UPLOAD_TYPE]             ?: "none",
-            autoTranscribe    = prefs[KEY_AUTO_TRANSCRIBE]         ?: false,
-            deleteAfterUpload = prefs[KEY_DELETE_AFTER_UPLOAD]     ?: false,
-            experimentalFeatures = prefs[KEY_EXPERIMENTAL]         ?: false,
-            // Drive（MutableStateFlow から読み出す）
-            isDriveSignedIn   = signedIn,
-            driveEmail        = email,
-            driveFolderName   = prefs[KEY_DRIVE_FOLDER_NAME]       ?: "CallMemoRecorder",
-            // FTPS
-            ftpsHost          = prefs[KEY_FTPS_HOST]               ?: "",
-            ftpsPort          = prefs[KEY_FTPS_PORT]               ?: 21,
-            ftpsUsername      = prefs[KEY_FTPS_USERNAME]           ?: "",
-            ftpsPassword      = prefs[KEY_FTPS_PASSWORD]           ?: "",
-            ftpsPath          = prefs[KEY_FTPS_PATH]               ?: "/recordings",
-        )
-    }
-    .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), SettingsState())
+    /** UI が直接 collect する — settings.isDriveSignedIn は参照しないこと */
+    val driveSignedIn: StateFlow<Boolean>     = _driveSignedIn.asStateFlow()
+    val driveEmail:    StateFlow<String?>     = _driveEmail.asStateFlow()
 
-    // FTPS接続テスト結果
-    private val _ftpsTestResult = MutableStateFlow<String?>(null)
+    // DataStore 由来の設定値（Drive サインイン状態は含まない）
+    val settings: StateFlow<SettingsState> =
+        dataStore.data
+            .catch { emit(emptyPreferences()) }
+            .map { prefs ->
+                SettingsState(
+                    audioSource          = prefs[KEY_AUDIO_SOURCE]           ?: "VOICE_COMMUNICATION",
+                    autoRecordCall       = prefs[KEY_AUTO_RECORD_CALL]       ?: false,
+                    autoStartOnBoot      = prefs[KEY_AUTO_START_ON_BOOT]     ?: true,
+                    autoUpload           = prefs[KEY_AUTO_UPLOAD]            ?: false,
+                    uploadType           = prefs[KEY_UPLOAD_TYPE]            ?: "none",
+                    autoTranscribe       = prefs[KEY_AUTO_TRANSCRIBE]        ?: false,
+                    deleteAfterUpload    = prefs[KEY_DELETE_AFTER_UPLOAD]    ?: false,
+                    experimentalFeatures = prefs[KEY_EXPERIMENTAL]           ?: false,
+                    driveFolderName      = prefs[KEY_DRIVE_FOLDER_NAME]      ?: "CallMemoRecorder",
+                    ftpsHost             = prefs[KEY_FTPS_HOST]              ?: "",
+                    ftpsPort             = prefs[KEY_FTPS_PORT]              ?: 21,
+                    ftpsUsername         = prefs[KEY_FTPS_USERNAME]          ?: "",
+                    ftpsPassword         = prefs[KEY_FTPS_PASSWORD]          ?: "",
+                    ftpsPath             = prefs[KEY_FTPS_PATH]              ?: "/recordings",
+                )
+            }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsState())
+
+    // テスト結果
+    private val _ftpsTestResult  = MutableStateFlow<String?>(null)
     val ftpsTestResult: StateFlow<String?> = _ftpsTestResult.asStateFlow()
 
-    // Drive接続テスト結果
     private val _driveTestResult = MutableStateFlow<String?>(null)
     val driveTestResult: StateFlow<String?> = _driveTestResult.asStateFlow()
 
-    // Google Sign-Inのインテントを提供
+    // ── Google Sign-In ────────────────────────────────────────────────────
+
     fun getGoogleSignInIntent(): Intent = driveRepository.getSignInIntent()
 
-    // Google Sign-In 成功後の処理
-    // account: SignInランチャーから直接受け取った GoogleSignInAccount
+    /**
+     * サインイン成功時に呼ぶ。
+     * account オブジェクトを DriveRepository にキャッシュし、
+     * _driveSignedIn / _driveEmail を即座に更新する。
+     */
     fun onGoogleSignInSuccess(account: GoogleSignInAccount?, email: String?) {
-        // DriveRepository にアカウントをキャッシュさせる（testConnection で利用）
         if (account != null) {
             driveRepository.cacheSignedInAccount(account)
         }
         _driveSignedIn.value = true
-        _driveEmail.value = email
+        _driveEmail.value    = email
     }
 
-    // Google Sign-Out
     fun signOutGoogle() = viewModelScope.launch {
         driveRepository.signOut()
-        kotlinx.coroutines.delay(500)
         _driveSignedIn.value = false
-        _driveEmail.value = null
+        _driveEmail.value    = null
     }
 
     /**
-     * 設定画面表示時 (onResume相当) に Drive サインイン状態を強制再評価。
-     * GoogleSignIn.getLastSignedInAccount() は Main スレッドから呼ぶ必要あり。
+     * 画面復帰時に Drive サインイン状態を再評価する。
+     * cachedAccount を優先し、なければ getLastSignedInAccount() を確認する。
      */
     fun refreshDriveSignInState() {
-        viewModelScope.launch {
-            val (signedIn, email) = withContext(Dispatchers.Main) {
-                Pair(driveRepository.isSignedIn(), driveRepository.getSignedInEmail())
-            }
-            _driveSignedIn.value = signedIn
-            _driveEmail.value = email
-        }
+        val signedIn = driveRepository.isSignedIn()
+        val email    = driveRepository.getSignedInEmail()
+        _driveSignedIn.value = signedIn
+        _driveEmail.value    = email
     }
 
-    /** Drive 接続テスト: 指定フォルダに "接続テスト.txt" をアップロード */
+    /** Drive 接続テスト */
     fun testDriveConnection(folderName: String) {
         viewModelScope.launch {
             _driveTestResult.value = "テスト中..."
-            val result = driveRepository.testConnection(folderName)
-            _driveTestResult.value = if (result == null)
+            val error = driveRepository.testConnection(folderName)
+            _driveTestResult.value = if (error == null)
                 "✅ 接続成功！「$folderName」フォルダに「接続テスト.txt」を作成しました"
             else
-                "❌ $result"
+                "❌ $error"
         }
     }
 
     fun clearDriveTestResult() { _driveTestResult.value = null }
 
-    // ── 設定保存メソッド群 ──────────────────────────────────
+    // ── 設定保存 ──────────────────────────────────────────────────────────
 
-    fun setAutoStartOnBoot(v: Boolean) = save { it[KEY_AUTO_START_ON_BOOT] = v }
+    fun setAutoStartOnBoot(v: Boolean)    = save { it[KEY_AUTO_START_ON_BOOT] = v }
 
     fun setAutoRecordCall(v: Boolean) {
         save { it[KEY_AUTO_RECORD_CALL] = v }
-        // 通話監視サービスをON/OFF連動
         if (v) {
             val intent = CallMonitorService.startIntent(context)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent)
+            else context.startService(intent)
         } else {
             context.startService(CallMonitorService.stopIntent(context))
         }
     }
-    fun setAutoUpload(v: Boolean)     = save { it[KEY_AUTO_UPLOAD] = v }
-    fun setUploadType(v: String)      = save { it[KEY_UPLOAD_TYPE] = v }
-    fun setAutoTranscribe(v: Boolean) = save { it[KEY_AUTO_TRANSCRIBE] = v }
-    fun setDeleteAfterUpload(v: Boolean) = save { it[KEY_DELETE_AFTER_UPLOAD] = v }
+
+    fun setAutoUpload(v: Boolean)         = save { it[KEY_AUTO_UPLOAD] = v }
+    fun setUploadType(v: String)          = save { it[KEY_UPLOAD_TYPE] = v }
+    fun setAutoTranscribe(v: Boolean)     = save { it[KEY_AUTO_TRANSCRIBE] = v }
+    fun setDeleteAfterUpload(v: Boolean)  = save { it[KEY_DELETE_AFTER_UPLOAD] = v }
     fun setExperimentalFeatures(v: Boolean) = save { it[KEY_EXPERIMENTAL] = v }
-    fun setSetupCompleted(v: Boolean) = save { it[KEY_SETUP_COMPLETED] = v }
+    fun setSetupCompleted(v: Boolean)     = save { it[KEY_SETUP_COMPLETED] = v }
+    fun setDriveFolderName(v: String)     = save { it[KEY_DRIVE_FOLDER_NAME] = v }
+    fun setAudioSource(v: String)         = save { it[KEY_AUDIO_SOURCE] = v }
+    fun setFtpsHost(v: String)            = save { it[KEY_FTPS_HOST] = v }
+    fun setFtpsPort(v: Int)               = save { it[KEY_FTPS_PORT] = v }
+    fun setFtpsUsername(v: String)        = save { it[KEY_FTPS_USERNAME] = v }
+    fun setFtpsPassword(v: String)        = save { it[KEY_FTPS_PASSWORD] = v }
+    fun setFtpsPath(v: String)            = save { it[KEY_FTPS_PATH] = v }
 
-    // Drive設定
-    fun setDriveFolderName(v: String) = save { it[KEY_DRIVE_FOLDER_NAME] = v }
-
-    // 録音ソース設定
-    fun setAudioSource(v: String) = save { it[KEY_AUDIO_SOURCE] = v }
-
-    // FTPS設定
-    fun setFtpsHost(v: String)     = save { it[KEY_FTPS_HOST] = v }
-    fun setFtpsPort(v: Int)        = save { it[KEY_FTPS_PORT] = v }
-    fun setFtpsUsername(v: String) = save { it[KEY_FTPS_USERNAME] = v }
-    fun setFtpsPassword(v: String) = save { it[KEY_FTPS_PASSWORD] = v }
-    fun setFtpsPath(v: String)     = save { it[KEY_FTPS_PATH] = v }
-
-    /** FTPS接続テスト */
     fun testFtpsConnection(host: String, port: Int, user: String, pass: String, path: String) {
         viewModelScope.launch {
             _ftpsTestResult.value = "テスト中..."
@@ -207,23 +189,21 @@ class SettingsViewModel(
     }
 }
 
+// SettingsState から isDriveSignedIn / driveEmail を完全除去
+// → UI は viewModel.driveSignedIn / viewModel.driveEmail を直接 collect する
 data class SettingsState(
-    val audioSource: String = "VOICE_COMMUNICATION",   // "VOICE_COMMUNICATION" / "MIC" / "VOICE_DOWNLINK" / "CAMCORDER" / "UNPROCESSED"
-    val autoStartOnBoot: Boolean = true,
-    val autoRecordCall: Boolean = false,
-    val autoUpload: Boolean = false,
-    val uploadType: String = "none",         // "drive" / "ftps" / "none"
-    val autoTranscribe: Boolean = false,
-    val deleteAfterUpload: Boolean = false,
+    val audioSource:          String  = "VOICE_COMMUNICATION",
+    val autoStartOnBoot:      Boolean = true,
+    val autoRecordCall:       Boolean = false,
+    val autoUpload:           Boolean = false,
+    val uploadType:           String  = "none",
+    val autoTranscribe:       Boolean = false,
+    val deleteAfterUpload:    Boolean = false,
     val experimentalFeatures: Boolean = false,
-    // Drive
-    val isDriveSignedIn: Boolean = false,
-    val driveEmail: String? = null,
-    val driveFolderName: String = "CallMemoRecorder",
-    // FTPS
-    val ftpsHost: String = "",
-    val ftpsPort: Int = 21,
-    val ftpsUsername: String = "",
-    val ftpsPassword: String = "",
-    val ftpsPath: String = "/recordings",
+    val driveFolderName:      String  = "CallMemoRecorder",
+    val ftpsHost:             String  = "",
+    val ftpsPort:             Int     = 21,
+    val ftpsUsername:         String  = "",
+    val ftpsPassword:         String  = "",
+    val ftpsPath:             String  = "/recordings",
 )
