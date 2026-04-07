@@ -59,9 +59,9 @@ jobs:
           echo "APK version: ${VERSION_NAME} (${VERSION_CODE})"
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon --max-workers=2 --build-cache
+        run: ./gradlew assembleDebug --no-daemon --max-workers=2 --no-build-cache
         env:
-          GRADLE_OPTS: "-Xmx4g -XX:MaxMetaspaceSize=512m"
+          GRADLE_OPTS: "-Xmx6g -XX:MaxMetaspaceSize=2g"
 
       - name: Rename APK with version
         run: |

@@ -102,7 +102,7 @@ dependencies {
     implementation(libs.navigation.compose)
 
     // Material Icons Extended (Mic, Cloud, Stop, Info, List, Settings, Warning etc.)
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.material:material-icons-extended:1.7.8")
 
     // Google Sign-In (Drive連携用)
     implementation("com.google.android.gms:play-services-auth:21.2.0")
