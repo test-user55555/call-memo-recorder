@@ -374,7 +374,7 @@ fun SettingsScreen(
 
             // ── アプリ情報 ────────────────────────────────────
             SectionCard(title = "アプリ情報") {
-                InfoRow(label = "バージョン", value = "1.3.4")
+                InfoRow(label = "バージョン", value = "1.3.5")
                 InfoRow(label = "ビルドタイプ", value = "DEBUG")
             }
         }

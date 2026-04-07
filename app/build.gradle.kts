@@ -22,8 +22,8 @@ android {
         applicationId = "com.example.callmemorecorder"
         minSdk = 28
         targetSdk = 28
-        versionCode = 7
-        versionName = "1.3.4"
+        versionCode = 8
+        versionName = "1.3.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -48,7 +48,8 @@ android {
         }
         debug {
             isDebuggable = true
-            applicationIdSuffix = ".debug"
+            // applicationIdSuffix を削除: suffixがあると更新インストール時に
+            // 別アプリ扱いされてインストール失敗する
         }
     }
 

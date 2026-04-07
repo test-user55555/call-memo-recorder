@@ -84,3 +84,5 @@ lint/tmp/
 .DS_Store
 Thumbs.db
 # Build: Mon Apr  6 05:24:22 UTC 2026
+debug.keystore
+debug.keystore.b64

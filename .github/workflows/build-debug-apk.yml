@@ -19,7 +19,6 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-          # キャッシュはここでは無効にして手動管理
           cache: 'gradle'
 
       - name: Setup Android SDK
@@ -28,8 +27,6 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      # AGP/Kotlin バージョン変更時はキャッシュキーに versions hash を含め
-      # 旧キャッシュを自動的に無視させる
       - name: Cache Gradle packages
         uses: actions/cache@v4
         with:
@@ -44,6 +41,14 @@ jobs:
         run: |
           rm -rf ~/.gradle/caches/transforms-* || true
           echo "Cleaned transform caches"
+
+      # ── 固定 debug.keystore を復元（更新インストールの署名一致のため） ──
+      - name: Restore fixed debug keystore
+        run: |
+          echo "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > "$HOME/.android/debug.keystore"
+          mkdir -p "$HOME/.android"
+          echo "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > "$HOME/.android/debug.keystore"
+          echo "Keystore restored: $(ls -lh $HOME/.android/debug.keystore)"
 
       - name: Extract version name
         id: version
