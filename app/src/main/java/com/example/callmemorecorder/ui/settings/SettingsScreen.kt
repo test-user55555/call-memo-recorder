@@ -133,6 +133,16 @@ fun SettingsScreen(
                     enabled = allGranted,
                     onCheckedChange = { viewModel.setAutoRecordCall(it) }
                 )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                SwitchRow(
+                    title = "OS起動時に自動起動",
+                    description = if (settings.autoStartOnBoot)
+                        "端末再起動後に通話監視サービスを自動で開始します"
+                    else
+                        "端末再起動後は手動で開始する必要があります",
+                    checked = settings.autoStartOnBoot,
+                    onCheckedChange = { viewModel.setAutoStartOnBoot(it) }
+                )
                 if (settings.autoRecordCall) {
                     InfoBox(
                         text = "⚠️ 端末により録音できる音声ソースが異なります（通話相手の音声は録音できない場合があります）",
@@ -345,7 +355,7 @@ fun SettingsScreen(
 
             // ── アプリ情報 ────────────────────────────────────
             SectionCard(title = "アプリ情報") {
-                InfoRow(label = "バージョン", value = "1.3.0")
+                InfoRow(label = "バージョン", value = "1.3.1")
                 InfoRow(label = "ビルドタイプ", value = "DEBUG")
             }
         }

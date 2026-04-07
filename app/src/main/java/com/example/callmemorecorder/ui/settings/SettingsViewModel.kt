@@ -33,6 +33,7 @@ class SettingsViewModel(
         val KEY_EXPERIMENTAL         = booleanPreferencesKey("experimental_features")
         val KEY_SETUP_COMPLETED      = booleanPreferencesKey("setup_completed")
         val KEY_AUTO_RECORD_CALL     = booleanPreferencesKey("auto_record_call")
+        val KEY_AUTO_START_ON_BOOT    = booleanPreferencesKey("auto_start_on_boot")
 
         // Drive
         val KEY_DRIVE_FOLDER_NAME    = stringPreferencesKey("drive_folder_name")
@@ -72,6 +73,7 @@ class SettingsViewModel(
         SettingsState(
             audioSource       = prefs[KEY_AUDIO_SOURCE]            ?: "VOICE_COMMUNICATION",
             autoRecordCall    = prefs[KEY_AUTO_RECORD_CALL]        ?: false,
+            autoStartOnBoot   = prefs[KEY_AUTO_START_ON_BOOT]      ?: true,
             autoUpload        = prefs[KEY_AUTO_UPLOAD]             ?: false,
             uploadType        = prefs[KEY_UPLOAD_TYPE]             ?: "none",
             autoTranscribe    = prefs[KEY_AUTO_TRANSCRIBE]         ?: false,
@@ -153,6 +155,8 @@ class SettingsViewModel(
 
     // ── 設定保存メソッド群 ──────────────────────────────────
 
+    fun setAutoStartOnBoot(v: Boolean) = save { it[KEY_AUTO_START_ON_BOOT] = v }
+
     fun setAutoRecordCall(v: Boolean) {
         save { it[KEY_AUTO_RECORD_CALL] = v }
         // 通話監視サービスをON/OFF連動
@@ -206,6 +210,7 @@ class SettingsViewModel(
 
 data class SettingsState(
     val audioSource: String = "VOICE_COMMUNICATION",   // "VOICE_COMMUNICATION" / "MIC" / "VOICE_DOWNLINK" / "CAMCORDER" / "UNPROCESSED"
+    val autoStartOnBoot: Boolean = true,
     val autoRecordCall: Boolean = false,
     val autoUpload: Boolean = false,
     val uploadType: String = "none",         // "drive" / "ftps" / "none"
