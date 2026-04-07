@@ -328,6 +328,23 @@ fun SettingsScreen(
                             Spacer(Modifier.width(8.dp))
                             Text("Google アカウントで接続")
                         }
+
+                        // ── 接続テストボタン（未サインイン時はグレーアウト表示）──
+                        Spacer(Modifier.height(4.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(4.dp))
+                        Button(
+                            onClick = {
+                                viewModel.clearDriveTestResult()
+                                viewModel.testDriveConnection(settings.driveFolderName)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = false   // 未サインイン時は押せない
+                        ) {
+                            Icon(Icons.Filled.NetworkCheck, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("接続テスト（先にアカウント接続が必要です）")
+                        }
                     }
                 }
             }
@@ -355,7 +372,7 @@ fun SettingsScreen(
 
             // ── アプリ情報 ────────────────────────────────────
             SectionCard(title = "アプリ情報") {
-                InfoRow(label = "バージョン", value = "1.3.1")
+                InfoRow(label = "バージョン", value = "1.3.2")
                 InfoRow(label = "ビルドタイプ", value = "DEBUG")
             }
         }
