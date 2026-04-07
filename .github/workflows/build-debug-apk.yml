@@ -45,7 +45,6 @@ jobs:
       # ── 固定 debug.keystore を復元（更新インストールの署名一致のため） ──
       - name: Restore fixed debug keystore
         run: |
-          echo "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > "$HOME/.android/debug.keystore"
           mkdir -p "$HOME/.android"
           echo "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > "$HOME/.android/debug.keystore"
           echo "Keystore restored: $(ls -lh $HOME/.android/debug.keystore)"
