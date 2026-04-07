@@ -52,8 +52,8 @@ class CallMonitorService : Service() {
         private const val BIT_RATE = 128000
 
         // 通話開始から録音を開始するまでの遅延（ms）
-        // 通話が確立するまでに少し時間が必要
-        private const val RECORD_START_DELAY_MS = 1000L
+        // 通話が確立するまでに少し時間が必要（短すぎると録音が始まる前に通話が終わることも）
+        private const val RECORD_START_DELAY_MS = 1500L
 
         // 有効な録音と見なす最小長（ms）
         private const val MIN_RECORDING_DURATION_MS = 2000L
@@ -290,28 +290,44 @@ class CallMonitorService : Service() {
     private fun startRecording() {
         if (isRecording) return
         if (!hasRecordAudioPermission()) {
-            Log.w(TAG, "RECORD_AUDIO permission not granted")
+            Log.w(TAG, "RECORD_AUDIO permission not granted – cannot record")
             return
         }
-        Log.i(TAG, "startRecording: attempting VOICE_COMMUNICATION source")
-        tryStartRecording(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
-            ?: tryStartRecording(MediaRecorder.AudioSource.VOICE_DOWNLINK)
-            ?: tryStartRecording(MediaRecorder.AudioSource.MIC)
-            ?: run {
-                Log.e(TAG, "All audio sources failed")
-                isRecording = false
-                currentOutputFile = null
+
+        // 試行する AudioSource のリスト（優先度順）
+        // VOICE_COMMUNICATION: 通話音声（自分の声）を最適化した録音。多くの端末で利用可能。
+        // MIC: マイク直接録音。上記が失敗した場合のフォールバック。
+        // VOICE_UPLINK/DOWNLINK は CAPTURE_AUDIO_OUTPUT 権限が必要なため使用しない。
+        val sources = listOf(
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.MIC
+        )
+
+        for (source in sources) {
+            Log.i(TAG, "startRecording: trying source=$source")
+            val result = tryStartRecording(source)
+            if (result != null) {
+                Log.i(TAG, "Recording started successfully with source=$source")
+                return
             }
+        }
+
+        Log.e(TAG, "All audio sources failed – recording not started")
+        isRecording = false
+        currentOutputFile = null
+        updateNotification("通話を監視中")  // 録音失敗時は通知を戻す
     }
 
     /**
      * 指定した AudioSource で録音を試みる。
      * 成功したらその File を返す、失敗したら null を返す。
+     * 失敗時は MediaRecorder を完全にリリースして null を返す。
      */
     private fun tryStartRecording(audioSource: Int): File? {
+        var recorder: MediaRecorder? = null
         return try {
             val outputFile = createOutputFile()
-            val recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            recorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 MediaRecorder(this)
             } else {
                 @Suppress("DEPRECATION")
@@ -324,6 +340,9 @@ class CallMonitorService : Service() {
                 setAudioSamplingRate(SAMPLE_RATE)
                 setAudioEncodingBitRate(BIT_RATE)
                 setOutputFile(outputFile.absolutePath)
+                setOnErrorListener { _, what, extra ->
+                    Log.e(TAG, "MediaRecorder error: what=$what, extra=$extra")
+                }
                 prepare()
                 start()
             }
@@ -334,8 +353,9 @@ class CallMonitorService : Service() {
             Log.i(TAG, "Recording started (source=$audioSource): ${outputFile.absolutePath}")
             outputFile
         } catch (e: Exception) {
-            Log.w(TAG, "startRecording failed (source=$audioSource): ${e.message}")
-            try { mediaRecorder?.release() } catch (_: Exception) {}
+            Log.w(TAG, "tryStartRecording failed (source=$audioSource): ${e.javaClass.simpleName}: ${e.message}")
+            try { recorder?.reset() } catch (_: Exception) {}
+            try { recorder?.release() } catch (_: Exception) {}
             mediaRecorder = null
             null
         }
@@ -346,24 +366,59 @@ class CallMonitorService : Service() {
     private fun stopRecording(): RecordingResult? {
         if (!isRecording) return null
         isRecording = false
+
         val durationMs = System.currentTimeMillis() - recordingStartTime
         val filePath = currentOutputFile?.absolutePath
+        val capturedRecorder = mediaRecorder
+        mediaRecorder = null
         currentOutputFile = null
+
+        Log.i(TAG, "stopRecording: durationMs=$durationMs, file=$filePath")
+
         return try {
-            mediaRecorder?.apply { stop(); reset(); release() }
-            mediaRecorder = null
-            if (filePath != null && File(filePath).exists() && durationMs > MIN_RECORDING_DURATION_MS) {
-                Log.i(TAG, "Recording saved: $filePath (${durationMs}ms)")
-                RecordingResult.Success(filePath, durationMs)
-            } else {
-                Log.w(TAG, "Recording too short or file missing: ${durationMs}ms, path=$filePath")
-                filePath?.let { File(it).delete() }
-                null
+            capturedRecorder?.apply {
+                try {
+                    stop()
+                } catch (stopEx: RuntimeException) {
+                    // stop() が失敗する場合（録音が極めて短い場合など）
+                    Log.w(TAG, "MediaRecorder.stop() threw RuntimeException: ${stopEx.message}")
+                    reset()
+                    release()
+                    filePath?.let { File(it).delete() }
+                    return null
+                }
+                reset()
+                release()
+            }
+
+            when {
+                filePath == null -> {
+                    Log.w(TAG, "stopRecording: filePath is null")
+                    null
+                }
+                !File(filePath).exists() -> {
+                    Log.w(TAG, "stopRecording: file does not exist: $filePath")
+                    null
+                }
+                File(filePath).length() == 0L -> {
+                    Log.w(TAG, "stopRecording: file is empty: $filePath")
+                    File(filePath).delete()
+                    null
+                }
+                durationMs < MIN_RECORDING_DURATION_MS -> {
+                    Log.w(TAG, "stopRecording: too short (${durationMs}ms < ${MIN_RECORDING_DURATION_MS}ms)")
+                    File(filePath).delete()
+                    null
+                }
+                else -> {
+                    Log.i(TAG, "Recording saved: $filePath (${durationMs}ms, ${File(filePath).length()} bytes)")
+                    RecordingResult.Success(filePath, durationMs)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "stopRecording error", e)
-            try { mediaRecorder?.release() } catch (_: Exception) {}
-            mediaRecorder = null
+            try { capturedRecorder?.release() } catch (_: Exception) {}
+            filePath?.let { try { File(it).delete() } catch (_: Exception) {} }
             null
         }
     }

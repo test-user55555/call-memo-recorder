@@ -12,8 +12,10 @@ import com.example.callmemorecorder.data.repository.DriveRepository
 import com.example.callmemorecorder.data.repository.FtpsConfig
 import com.example.callmemorecorder.data.repository.FtpsRepository
 import com.example.callmemorecorder.service.CallMonitorService
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SettingsViewModel(
     private val dataStore: androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences>,
@@ -99,28 +101,36 @@ class SettingsViewModel(
     // Google Sign-In 成功後の処理
     fun onGoogleSignInSuccess() {
         viewModelScope.launch {
-            // GoogleSignIn.getLastSignedInAccount() のキャッシュが更新されるまで少し待つ
-            kotlinx.coroutines.delay(500)
-            _driveSignedIn.value = driveRepository.isSignedIn()
-            _driveEmail.value = driveRepository.getSignedInEmail()
+            // GoogleSignIn のキャッシュ更新を待つ（Main スレッドで確認する必要あり）
+            kotlinx.coroutines.delay(800)
+            val (signedIn, email) = withContext(Dispatchers.Main) {
+                Pair(driveRepository.isSignedIn(), driveRepository.getSignedInEmail())
+            }
+            _driveSignedIn.value = signedIn
+            _driveEmail.value = email
         }
     }
 
     // Google Sign-Out
     fun signOutGoogle() = viewModelScope.launch {
         driveRepository.signOut()
-        kotlinx.coroutines.delay(300)
+        kotlinx.coroutines.delay(500)
         _driveSignedIn.value = false
         _driveEmail.value = null
     }
 
     /**
      * 設定画面表示時 (onResume相当) に Drive サインイン状態を強制再評価。
-     * GoogleSignIn.getLastSignedInAccount() のキャッシュ更新後に呼ぶ。
+     * GoogleSignIn.getLastSignedInAccount() は Main スレッドから呼ぶ必要あり。
      */
     fun refreshDriveSignInState() {
-        _driveSignedIn.value = driveRepository.isSignedIn()
-        _driveEmail.value = driveRepository.getSignedInEmail()
+        viewModelScope.launch {
+            val (signedIn, email) = withContext(Dispatchers.Main) {
+                Pair(driveRepository.isSignedIn(), driveRepository.getSignedInEmail())
+            }
+            _driveSignedIn.value = signedIn
+            _driveEmail.value = email
+        }
     }
 
     /** Drive 接続テスト: 指定フォルダに "接続テスト.txt" をアップロード */

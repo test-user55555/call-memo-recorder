@@ -20,8 +20,10 @@ import com.example.callmemorecorder.domain.model.*
 import com.example.callmemorecorder.service.RecordingService
 import com.example.callmemorecorder.service.RecordingState
 import com.example.callmemorecorder.worker.UploadWorker
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
@@ -97,10 +99,12 @@ class HomeViewModel(
                     }
                 }
         }
-        // Drive サインイン状態の定期確認（3秒ごと）
+        // Drive サインイン状態の定期確認（3秒ごと、Mainスレッドで確認）
         viewModelScope.launch {
             while (true) {
-                val isDriveSignedIn = driveRepository.isSignedIn()
+                val isDriveSignedIn = withContext(Dispatchers.Main) {
+                    driveRepository.isSignedIn()
+                }
                 _uiState.update { it.copy(isDriveConnected = isDriveSignedIn) }
                 kotlinx.coroutines.delay(3000)
             }
@@ -121,7 +125,10 @@ class HomeViewModel(
 
     /** onResume 相当: 設定画面から戻ったときに Drive サインイン状態を最新化 */
     fun refreshStatus() {
-        _uiState.update { it.copy(isDriveConnected = driveRepository.isSignedIn()) }
+        viewModelScope.launch {
+            val signedIn = withContext(Dispatchers.Main) { driveRepository.isSignedIn() }
+            _uiState.update { it.copy(isDriveConnected = signedIn) }
+        }
     }
 
     fun startRecording() {

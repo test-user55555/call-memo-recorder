@@ -27,7 +27,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.common.api.ApiException
@@ -105,9 +104,7 @@ fun SettingsScreen(
 
             // ── 通話自動録音 ─────────────────────────────────
             SectionCard(title = "通話自動録音") {
-
                 val allGranted = callPermState.allPermissionsGranted
-
                 if (!allGranted) {
                     InfoBox(
                         text = "通話を自動録音するには「電話」「マイク」「連絡先」「通知」の権限が必要です。",
@@ -123,11 +120,10 @@ fun SettingsScreen(
                         Text("権限を許可する")
                     }
                 }
-
                 SwitchRow(
                     title = "通話を自動で録音する",
                     description = if (allGranted)
-                        "通話開始時に自動録音、終了時に自動停止します（通知バーに監視アイコンが表示されます）"
+                        "通話開始時に自動録音、終了時に自動停止します"
                     else
                         "権限を許可してから有効化してください",
                     checked = settings.autoRecordCall,
@@ -136,13 +132,105 @@ fun SettingsScreen(
                 )
                 if (settings.autoRecordCall) {
                     InfoBox(
-                        text = "⚠️ 自分の声のみ録音されます（OSの制約により通話相手の声は録音できません）",
+                        text = "⚠️ 端末により録音できる音声ソースが異なります（通話相手の音声は録音できない場合があります）",
                         isWarning = true
                     )
                     InfoBox(
                         text = "📌 通知バーに「通話を監視中」が表示されている間、着信を自動検知します",
                         isWarning = false
                     )
+                }
+            }
+
+            // ── Google Drive 設定（常時表示・autoUpload非依存） ────────────
+            SectionCard(title = "Google Drive 設定") {
+                if (settings.isDriveSignedIn) {
+                    // ── サインイン済み ──
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Filled.CheckCircle, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("接続済み", fontWeight = FontWeight.Bold)
+                            Text(
+                                settings.driveEmail ?: "",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        OutlinedButton(onClick = {
+                            viewModel.signOutGoogle()
+                            viewModel.clearDriveTestResult()
+                        }) { Text("切断") }
+                    }
+
+                    Spacer(Modifier.height(8.dp))
+                    LabeledTextField(
+                        label = "アップロード先フォルダ名",
+                        value = settings.driveFolderName,
+                        placeholder = "例: CallMemoRecorder",
+                        onValueChange = { viewModel.setDriveFolderName(it) }
+                    )
+                    Text(
+                        "Googleドライブのルートにこの名前のフォルダが作成されます",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(Modifier.height(8.dp))
+
+                    // ── 接続テストボタン（サインイン済み時に表示） ──
+                    Button(
+                        onClick = {
+                            viewModel.clearDriveTestResult()
+                            viewModel.testDriveConnection(settings.driveFolderName)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.NetworkCheck, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("接続テスト（テストファイルをアップロード）")
+                    }
+
+                    // テスト結果
+                    driveTestResult?.let { result ->
+                        Spacer(Modifier.height(4.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = when {
+                                    result.startsWith("✅") -> MaterialTheme.colorScheme.primaryContainer
+                                    result == "テスト中..." -> MaterialTheme.colorScheme.surfaceVariant
+                                    else -> MaterialTheme.colorScheme.errorContainer
+                                }
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = result,
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                    }
+
+                } else {
+                    // ── 未サインイン ──
+                    InfoBox(
+                        text = "Google アカウントでサインインすると、録音ファイルを自動的に Google Drive にアップロードできます。",
+                        isWarning = false
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Button(
+                        onClick = { signInLauncher.launch(viewModel.getGoogleSignInIntent()) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.AccountCircle, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Google アカウントで接続")
+                    }
                 }
             }
 
@@ -167,112 +255,18 @@ fun SettingsScreen(
                         selected = settings.uploadType,
                         onSelect = { viewModel.setUploadType(it) }
                     )
+                    // drive選択時・未接続の警告
                     if (settings.uploadType == "drive" && !settings.isDriveSignedIn) {
                         Spacer(Modifier.height(4.dp))
                         InfoBox(
-                            text = "⚠️ 「Google Drive 設定」でアカウントに接続してください",
+                            text = "⚠️ 上の「Google Drive 設定」でアカウントに接続してください",
                             isWarning = true
                         )
                     }
                 }
             }
 
-            // ── Google Drive 設定（アップロード先が "drive" のときのみ表示） ──
-            if (settings.uploadType == "drive") {
-                SectionCard(title = "Google Drive 設定") {
-                    if (settings.isDriveSignedIn) {
-                        // ── サインイン済み ──
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                Icons.Filled.CheckCircle, contentDescription = null,
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("接続済み", fontWeight = FontWeight.Bold)
-                                Text(
-                                    settings.driveEmail ?: "",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            OutlinedButton(onClick = {
-                                viewModel.signOutGoogle()
-                                viewModel.clearDriveTestResult()
-                            }) {
-                                Text("切断")
-                            }
-                        }
-
-                        Spacer(Modifier.height(8.dp))
-                        LabeledTextField(
-                            label = "アップロード先フォルダ名",
-                            value = settings.driveFolderName,
-                            placeholder = "例: CallMemoRecorder",
-                            onValueChange = { viewModel.setDriveFolderName(it) }
-                        )
-                        Text(
-                            "Googleドライブのルートにこの名前のフォルダが作成されます",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(Modifier.height(8.dp))
-
-                        // ── Drive 接続テストボタン ──
-                        Button(
-                            onClick = {
-                                viewModel.clearDriveTestResult()
-                                viewModel.testDriveConnection(settings.driveFolderName)
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Filled.NetworkCheck, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("接続テスト（テストファイルをアップロード）")
-                        }
-
-                        // テスト結果表示
-                        driveTestResult?.let { result ->
-                            Spacer(Modifier.height(4.dp))
-                            Card(
-                                colors = CardDefaults.cardColors(
-                                    containerColor = when {
-                                        result.startsWith("✅") -> MaterialTheme.colorScheme.primaryContainer
-                                        result == "テスト中..." -> MaterialTheme.colorScheme.surfaceVariant
-                                        else -> MaterialTheme.colorScheme.errorContainer
-                                    }
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(
-                                    text = result,
-                                    modifier = Modifier.padding(12.dp),
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-                    } else {
-                        // ── 未サインイン ──
-                        InfoBox(
-                            text = "Google アカウントでサインインすると、録音ファイルを自動的に Google Drive にアップロードできます。",
-                            isWarning = false
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Button(
-                            onClick = { signInLauncher.launch(viewModel.getGoogleSignInIntent()) },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Icon(Icons.Filled.AccountCircle, contentDescription = null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("Google アカウントで接続")
-                        }
-                    }
-                }
-            }
-
-            // ── FTPS 設定 ─────────────────────────────────────
+            // ── FTPS 設定（ftps選択時のみ表示） ─────────────────
             if (settings.autoUpload && settings.uploadType == "ftps") {
                 SectionCard(title = "FTPS 設定") {
                     FtpsSettingsForm(
@@ -322,10 +316,7 @@ private fun UploadTypeSelector(selected: String, onSelect: (String) -> Unit) {
                     modifier = Modifier.padding(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    RadioButton(
-                        selected = selected == key,
-                        onClick = { onSelect(key) }
-                    )
+                    RadioButton(selected = selected == key, onClick = { onSelect(key) })
                     Spacer(Modifier.width(8.dp))
                     Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(8.dp))
@@ -344,36 +335,21 @@ private fun FtpsSettingsForm(
     ftpsTestResult: String?
 ) {
     var showPassword by remember { mutableStateOf(false) }
-
     var host by remember(settings.ftpsHost) { mutableStateOf(settings.ftpsHost) }
     var port by remember(settings.ftpsPort) { mutableStateOf(settings.ftpsPort.toString()) }
     var user by remember(settings.ftpsUsername) { mutableStateOf(settings.ftpsUsername) }
     var pass by remember(settings.ftpsPassword) { mutableStateOf(settings.ftpsPassword) }
     var path by remember(settings.ftpsPath) { mutableStateOf(settings.ftpsPath) }
 
-    LabeledTextField(
-        label = "ホスト名 / IPアドレス",
-        value = host,
-        placeholder = "例: ftp.example.com",
-        onValueChange = { host = it; viewModel.setFtpsHost(it) }
-    )
-    LabeledTextField(
-        label = "ポート番号",
-        value = port,
-        placeholder = "21",
-        keyboardType = KeyboardType.Number,
-        onValueChange = {
-            port = it
-            it.toIntOrNull()?.let { p -> viewModel.setFtpsPort(p) }
-        }
-    )
-    LabeledTextField(
-        label = "ユーザー名",
-        value = user,
-        placeholder = "ftpuser",
-        onValueChange = { user = it; viewModel.setFtpsUsername(it) }
-    )
-
+    LabeledTextField("ホスト名 / IPアドレス", host, "例: ftp.example.com") {
+        host = it; viewModel.setFtpsHost(it)
+    }
+    LabeledTextField("ポート番号", port, "21", KeyboardType.Number) {
+        port = it; it.toIntOrNull()?.let { p -> viewModel.setFtpsPort(p) }
+    }
+    LabeledTextField("ユーザー名", user, "ftpuser") {
+        user = it; viewModel.setFtpsUsername(it)
+    }
     OutlinedTextField(
         value = pass,
         onValueChange = { pass = it; viewModel.setFtpsPassword(it) },
@@ -391,21 +367,12 @@ private fun FtpsSettingsForm(
             }
         }
     )
-
-    LabeledTextField(
-        label = "アップロード先パス",
-        value = path,
-        placeholder = "例: /recordings",
-        onValueChange = { path = it; viewModel.setFtpsPath(it) }
-    )
-
+    LabeledTextField("アップロード先パス", path, "例: /recordings") {
+        path = it; viewModel.setFtpsPath(it)
+    }
     Spacer(Modifier.height(8.dp))
-
     Button(
-        onClick = {
-            val p = port.toIntOrNull() ?: 21
-            viewModel.testFtpsConnection(host, p, user, pass, path)
-        },
+        onClick = { viewModel.testFtpsConnection(host, port.toIntOrNull() ?: 21, user, pass, path) },
         modifier = Modifier.fillMaxWidth(),
         enabled = host.isNotBlank() && user.isNotBlank() && pass.isNotBlank()
     ) {
@@ -413,23 +380,18 @@ private fun FtpsSettingsForm(
         Spacer(Modifier.width(8.dp))
         Text("接続テスト")
     }
-
     ftpsTestResult?.let { result ->
         Spacer(Modifier.height(4.dp))
         Card(
             colors = CardDefaults.cardColors(
                 containerColor = if (result.startsWith("✅"))
                     MaterialTheme.colorScheme.primaryContainer
-                else
-                    MaterialTheme.colorScheme.errorContainer
+                else MaterialTheme.colorScheme.errorContainer
             ),
             modifier = Modifier.fillMaxWidth()
         ) {
-            Text(
-                text = result,
-                modifier = Modifier.padding(12.dp),
-                style = MaterialTheme.typography.bodyMedium
-            )
+            Text(text = result, modifier = Modifier.padding(12.dp),
+                style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -447,7 +409,8 @@ private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Un
             modifier = Modifier.padding(bottom = 6.dp)
         )
         Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 content()
             }
         }
@@ -456,11 +419,8 @@ private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Un
 
 @Composable
 private fun SwitchRow(
-    title: String,
-    description: String,
-    checked: Boolean,
-    enabled: Boolean = true,
-    onCheckedChange: (Boolean) -> Unit
+    title: String, description: String, checked: Boolean,
+    enabled: Boolean = true, onCheckedChange: (Boolean) -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -469,11 +429,8 @@ private fun SwitchRow(
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Text(title, fontWeight = FontWeight.Medium)
-            Text(
-                description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text(description, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
     }
@@ -481,15 +438,12 @@ private fun SwitchRow(
 
 @Composable
 private fun LabeledTextField(
-    label: String,
-    value: String,
-    placeholder: String = "",
+    label: String, value: String, placeholder: String = "",
     keyboardType: KeyboardType = KeyboardType.Text,
     onValueChange: (String) -> Unit
 ) {
     OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
+        value = value, onValueChange = onValueChange,
         label = { Text(label) },
         placeholder = { Text(placeholder, color = MaterialTheme.colorScheme.outline) },
         modifier = Modifier.fillMaxWidth(),
@@ -502,17 +456,18 @@ private fun LabeledTextField(
 private fun InfoBox(text: String, isWarning: Boolean = false) {
     Card(
         colors = CardDefaults.cardColors(
-            containerColor = if (isWarning) MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
-                             else MaterialTheme.colorScheme.surfaceVariant
+            containerColor = if (isWarning)
+                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+            else MaterialTheme.colorScheme.surfaceVariant
         ),
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(modifier = Modifier.padding(10.dp), verticalAlignment = Alignment.Top) {
             Icon(
                 if (isWarning) Icons.Filled.Warning else Icons.Filled.Info,
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = if (isWarning) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                contentDescription = null, modifier = Modifier.size(16.dp),
+                tint = if (isWarning) MaterialTheme.colorScheme.error
+                       else MaterialTheme.colorScheme.primary
             )
             Spacer(Modifier.width(8.dp))
             Text(text, style = MaterialTheme.typography.bodySmall)
