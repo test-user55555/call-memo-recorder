@@ -55,17 +55,35 @@ class SettingsViewModel(
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Drive サインイン状態: settings StateFlow とは完全に独立した StateFlow
-    // combine() のパイプラインを経由しないため、value 代入が即座に UI に反映される
+    // Drive サインイン状態
+    //   - settings StateFlow とは独立した MutableStateFlow
+    //   - init ブロックで trySilentSignIn() を呼んで最新化する
     // ─────────────────────────────────────────────────────────────────────
-    private val _driveSignedIn = MutableStateFlow(driveRepository.isSignedIn())
-    private val _driveEmail    = MutableStateFlow(driveRepository.getSignedInEmail())
+    private val _driveSignedIn = MutableStateFlow(false)
+    private val _driveEmail    = MutableStateFlow<String?>(null)
 
-    /** UI が直接 collect する — settings.isDriveSignedIn は参照しないこと */
-    val driveSignedIn: StateFlow<Boolean>     = _driveSignedIn.asStateFlow()
-    val driveEmail:    StateFlow<String?>     = _driveEmail.asStateFlow()
+    /** UI が直接 collect するサインイン状態 */
+    val driveSignedIn: StateFlow<Boolean>  = _driveSignedIn.asStateFlow()
+    val driveEmail:    StateFlow<String?>  = _driveEmail.asStateFlow()
 
-    // DataStore 由来の設定値（Drive サインイン状態は含まない）
+    init {
+        // ViewModel 生成時に即座に同期チェック
+        val syncResult = driveRepository.isSignedIn()
+        _driveSignedIn.value = syncResult
+        _driveEmail.value    = driveRepository.getSignedInEmail()
+
+        // さらに silentSignIn で非同期に最新状態を取得
+        viewModelScope.launch {
+            val account = driveRepository.trySilentSignIn()
+            if (account != null) {
+                _driveSignedIn.value = true
+                _driveEmail.value    = account.email
+            }
+            // silentSignIn が失敗しても isSignedIn() が true なら状態を維持
+        }
+    }
+
+    // DataStore 由来の設定値
     val settings: StateFlow<SettingsState> =
         dataStore.data
             .catch { emit(emptyPreferences()) }
@@ -101,16 +119,20 @@ class SettingsViewModel(
     fun getGoogleSignInIntent(): Intent = driveRepository.getSignInIntent()
 
     /**
-     * サインイン成功時に呼ぶ。
-     * account オブジェクトを DriveRepository にキャッシュし、
-     * _driveSignedIn / _driveEmail を即座に更新する。
+     * サインインランチャーの結果を受けて呼ぶ。
+     * account が null でも email だけあれば "接続済み" とみなす。
      */
     fun onGoogleSignInSuccess(account: GoogleSignInAccount?, email: String?) {
         if (account != null) {
             driveRepository.cacheSignedInAccount(account)
+            _driveSignedIn.value = true
+            _driveEmail.value    = account.email ?: email
+        } else if (email != null) {
+            // account は取れなかったが email がある → 部分成功
+            _driveSignedIn.value = true
+            _driveEmail.value    = email
         }
-        _driveSignedIn.value = true
-        _driveEmail.value    = email
+        // どちらもなければ何もしない（サインイン失敗）
     }
 
     fun signOutGoogle() = viewModelScope.launch {
@@ -120,14 +142,23 @@ class SettingsViewModel(
     }
 
     /**
-     * 画面復帰時に Drive サインイン状態を再評価する。
-     * cachedAccount を優先し、なければ getLastSignedInAccount() を確認する。
+     * 画面復帰時（ON_RESUME）に Drive サインイン状態を再評価する。
+     * trySilentSignIn() で最新のアカウント情報を取得する。
      */
     fun refreshDriveSignInState() {
+        // まず同期チェックで即座に反映
         val signedIn = driveRepository.isSignedIn()
-        val email    = driveRepository.getSignedInEmail()
         _driveSignedIn.value = signedIn
-        _driveEmail.value    = email
+        _driveEmail.value    = driveRepository.getSignedInEmail()
+
+        // silentSignIn で非同期にアカウントを最新化
+        viewModelScope.launch {
+            val account = driveRepository.trySilentSignIn()
+            if (account != null) {
+                _driveSignedIn.value = true
+                _driveEmail.value    = account.email
+            }
+        }
     }
 
     /** Drive 接続テスト */
@@ -189,8 +220,6 @@ class SettingsViewModel(
     }
 }
 
-// SettingsState から isDriveSignedIn / driveEmail を完全除去
-// → UI は viewModel.driveSignedIn / viewModel.driveEmail を直接 collect する
 data class SettingsState(
     val audioSource:          String  = "VOICE_COMMUNICATION",
     val autoStartOnBoot:      Boolean = true,

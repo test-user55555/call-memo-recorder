@@ -8,6 +8,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignIn
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import com.google.android.gms.auth.api.signin.GoogleSignInClient
 import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.Scope
 import com.google.api.client.googleapis.extensions.android.gms.auth.GoogleAccountCredential
 import com.google.api.client.http.ByteArrayContent
 import com.google.api.client.http.FileContent
@@ -17,22 +18,23 @@ import com.google.api.services.drive.Drive
 import com.google.api.services.drive.DriveScopes
 import com.google.api.services.drive.model.File as DriveFile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.coroutines.resume
 
 /**
  * Google Drive 連携リポジトリ。
- * Google Sign-In + Drive REST API を使用。
  *
- * ■ isSignedIn() の判定について
- *   GoogleSignIn.getLastSignedInAccount() は直近のアカウント情報をローカルキャッシュから
- *   返すだけで、実際に Drive スコープが付与されているかは granted scopes から確認する。
- *   ただし getGrantedScopes() は GoogleSignInAccount が null でなければ
- *   常に空コレクションを返す端末もあるため、email が取れていれば接続済みとみなす
- *   実用的な判定を採用する（テスト接続で実際の認証有無を確認する設計）。
+ * ■ サインイン状態の判定について
+ *   - cachedAccount: 明示的なサインイン成功時 (cacheSignedInAccount) または
+ *     silentSignIn 成功時にセットされる。
+ *   - isSignedIn() は cachedAccount を優先し、なければ getLastSignedInAccount で補完。
+ *   - trySilentSignIn(): 起動時・画面復帰時に呼び出し、cachedAccount を最新化する。
+ *     これにより ViewModel 再生成後もサインイン状態が正しく復元される。
  */
 class DriveRepository(private val context: Context) {
 
@@ -43,46 +45,88 @@ class DriveRepository(private val context: Context) {
 
     val isEnabled: Boolean = true
 
-    // サインイン成功時にアカウントをキャッシュする（getLastSignedInAccountのキャッシュ遅延を回避）
+    /** サインイン成功時にキャッシュするアカウント（volatile で最新値を保証） */
     @Volatile
-    private var cachedAccount: GoogleSignInAccount? = null
+    var cachedAccount: GoogleSignInAccount? = null
+        private set
 
-    fun getSignInClient(): GoogleSignInClient {
-        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
-            .requestEmail()
-            .requestScopes(com.google.android.gms.common.api.Scope(DriveScopes.DRIVE_FILE))
-            .build()
-        return GoogleSignIn.getClient(context, gso)
-    }
+    // ── Sign-In Client ────────────────────────────────────────────────────
+
+    private fun buildGso() = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+        .requestEmail()
+        .requestScopes(Scope(DriveScopes.DRIVE_FILE))
+        .build()
+
+    fun getSignInClient(): GoogleSignInClient = GoogleSignIn.getClient(context, buildGso())
 
     fun getSignInIntent(): Intent = getSignInClient().signInIntent
 
+    // ── サインイン状態 ──────────────────────────────────────────────────────
+
     /**
-     * Google アカウントにサインイン済みかつ email が取得できているかで判定。
-     * cachedAccount を優先し、なければ getLastSignedInAccount を確認する。
+     * 現在のサインイン状態を返す。
+     * cachedAccount を優先し、なければ getLastSignedInAccount で補完する。
      */
     fun isSignedIn(): Boolean {
         if (cachedAccount?.email != null) return true
         val account = GoogleSignIn.getLastSignedInAccount(context) ?: return false
-        return account.email != null
+        // getLastSignedInAccount で取得できた場合はキャッシュに昇格させる
+        if (account.email != null) {
+            cachedAccount = account
+            return true
+        }
+        return false
     }
 
-    fun getSignedInEmail(): String? =
-        cachedAccount?.email ?: GoogleSignIn.getLastSignedInAccount(context)?.email
+    fun getSignedInEmail(): String? = cachedAccount?.email
+        ?: GoogleSignIn.getLastSignedInAccount(context)?.email
 
     /**
-     * サインイン成功時にアカウントをキャッシュする。
-     * SettingsViewModel から呼び出される。
+     * サインイン成功時にアカウントを明示的にキャッシュする（signInLauncher から呼ぶ）。
      */
     fun cacheSignedInAccount(account: GoogleSignInAccount) {
         cachedAccount = account
         Log.i(TAG, "cacheSignedInAccount: ${account.email}")
     }
 
-    suspend fun signOut() = withContext(Dispatchers.IO) {
+    /**
+     * silentSignIn を試みて cachedAccount を最新化する（suspend 関数）。
+     * ViewModel の init / refreshDriveSignInState から呼び出す。
+     * @return サインイン済みアカウント or null
+     */
+    suspend fun trySilentSignIn(): GoogleSignInAccount? = withContext(Dispatchers.Main) {
+        // getLastSignedInAccount が有効ならそれを使う（同期・高速）
+        val last = GoogleSignIn.getLastSignedInAccount(context)
+        if (last?.email != null) {
+            cachedAccount = last
+            Log.i(TAG, "trySilentSignIn: restored from getLastSignedInAccount (${last.email})")
+            return@withContext last
+        }
+        // silentSignIn は非同期 Task なので coroutine で待機
+        return@withContext suspendCancellableCoroutine { cont ->
+            getSignInClient().silentSignIn()
+                .addOnSuccessListener { account ->
+                    cachedAccount = account
+                    Log.i(TAG, "trySilentSignIn: silentSignIn success (${account.email})")
+                    cont.resume(account)
+                }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "trySilentSignIn: silentSignIn failed: ${e.message}")
+                    cont.resume(null)
+                }
+        }
+    }
+
+    fun clearCache() {
         cachedAccount = null
+    }
+
+    suspend fun signOut() = withContext(Dispatchers.IO) {
+        clearCache()
         try { getSignInClient().signOut() } catch (e: Exception) { Log.e(TAG, "signOut: ${e.message}") }
     }
+
+    // ── Drive サービス ────────────────────────────────────────────────────
 
     private fun getDriveService(account: GoogleSignInAccount): Drive {
         val credential = GoogleAccountCredential.usingOAuth2(
@@ -97,13 +141,14 @@ class DriveRepository(private val context: Context) {
         ).setApplicationName(APP_NAME).build()
     }
 
+    // ── 接続テスト ────────────────────────────────────────────────────────
+
     /**
      * 接続テスト: 指定フォルダに "接続テスト.txt" をアップロードする。
      * cachedAccount を優先し、なければ getLastSignedInAccount にフォールバック。
      * @return null = 成功, エラーメッセージ文字列 = 失敗
      */
     suspend fun testConnection(folderName: String): String? = withContext(Dispatchers.IO) {
-        // cachedAccount を優先（getLastSignedInAccount のキャッシュ遅延を回避）
         val account = cachedAccount
             ?: GoogleSignIn.getLastSignedInAccount(context)
             ?: return@withContext "Google アカウントにサインインしていません"
@@ -122,7 +167,6 @@ class DriveRepository(private val context: Context) {
                 mimeType = "text/plain"
                 parents = listOf(folderId)
             }
-            // 同名ファイルがある場合は削除してから再作成
             deleteExistingTestFile(drive, folderId)
 
             drive.files().create(meta, byteContent)
@@ -155,7 +199,6 @@ class DriveRepository(private val context: Context) {
 
     suspend fun uploadFile(file: File, folderName: String = "CallMemoRecorder"): Pair<String, String>? =
         withContext(Dispatchers.IO) {
-            // cachedAccount を優先
             val account = cachedAccount
                 ?: GoogleSignIn.getLastSignedInAccount(context) ?: return@withContext null
             try {
