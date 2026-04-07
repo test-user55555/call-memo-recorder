@@ -257,12 +257,10 @@ class CallMonitorService : Service() {
 
     private fun onCallStarted() {
         if (isRecording) return
-        // 通知を「録音中」に更新
         updateNotification("録音中")
-        // 少し遅延してから録音開始（通話確立を待つ）
         serviceScope.launch {
             delay(RECORD_START_DELAY_MS)
-            startRecording()
+            startRecordingWithSource()  // DataStoreから設定ソースを読み起動
         }
     }
 
@@ -287,6 +285,50 @@ class CallMonitorService : Service() {
     // ── 録音制御 ─────────────────────────────────────────────
 
     @Synchronized
+    private suspend fun startRecordingWithSource() {
+        if (isRecording) return
+        if (!hasRecordAudioPermission()) {
+            Log.w(TAG, "RECORD_AUDIO permission not granted – cannot record")
+            return
+        }
+        val prefs = container.dataStore.data.first()
+        val sourceKey = prefs[stringPreferencesKey("audio_source")] ?: "VOICE_COMMUNICATION"
+        val preferredSource = audioSourceFromKey(sourceKey)
+
+        // 選択ソースを最優先に試行、失敗時は MIC でフォールバック
+        val sources = if (preferredSource == MediaRecorder.AudioSource.MIC) {
+            listOf(MediaRecorder.AudioSource.MIC)
+        } else {
+            listOf(preferredSource, MediaRecorder.AudioSource.MIC)
+        }
+
+        for (source in sources) {
+            Log.i(TAG, "startRecording: trying source=$source (key=$sourceKey)")
+            val result = tryStartRecording(source)
+            if (result != null) {
+                Log.i(TAG, "Recording started successfully with source=$source")
+                return
+            }
+        }
+
+        Log.e(TAG, "All audio sources failed – recording not started")
+        isRecording = false
+        currentOutputFile = null
+        updateNotification("通話を監視中")
+    }
+
+    private fun audioSourceFromKey(key: String): Int = when (key) {
+        "MIC"                 -> MediaRecorder.AudioSource.MIC
+        "CAMCORDER"           -> MediaRecorder.AudioSource.CAMCORDER
+        "VOICE_RECOGNITION"   -> MediaRecorder.AudioSource.VOICE_RECOGNITION
+        "VOICE_COMMUNICATION" -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        "UNPROCESSED"         -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N)
+                                     MediaRecorder.AudioSource.UNPROCESSED
+                                 else MediaRecorder.AudioSource.MIC
+        else                  -> MediaRecorder.AudioSource.VOICE_COMMUNICATION
+    }
+
+    @Synchronized
     private fun startRecording() {
         if (isRecording) return
         if (!hasRecordAudioPermission()) {
@@ -294,10 +336,6 @@ class CallMonitorService : Service() {
             return
         }
 
-        // 試行する AudioSource のリスト（優先度順）
-        // VOICE_COMMUNICATION: 通話音声（自分の声）を最適化した録音。多くの端末で利用可能。
-        // MIC: マイク直接録音。上記が失敗した場合のフォールバック。
-        // VOICE_UPLINK/DOWNLINK は CAPTURE_AUDIO_OUTPUT 権限が必要なため使用しない。
         val sources = listOf(
             MediaRecorder.AudioSource.VOICE_COMMUNICATION,
             MediaRecorder.AudioSource.MIC
@@ -315,7 +353,7 @@ class CallMonitorService : Service() {
         Log.e(TAG, "All audio sources failed – recording not started")
         isRecording = false
         currentOutputFile = null
-        updateNotification("通話を監視中")  // 録音失敗時は通知を戻す
+        updateNotification("通話を監視中")
     }
 
     /**

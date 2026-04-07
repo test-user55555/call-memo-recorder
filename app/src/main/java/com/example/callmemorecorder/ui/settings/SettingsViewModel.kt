@@ -37,6 +37,9 @@ class SettingsViewModel(
         // Drive
         val KEY_DRIVE_FOLDER_NAME    = stringPreferencesKey("drive_folder_name")
 
+        // 録音ソース
+        val KEY_AUDIO_SOURCE         = stringPreferencesKey("audio_source")  // "VOICE_COMMUNICATION" / "MIC" / "VOICE_DOWNLINK"
+
         // FTPS
         val KEY_FTPS_HOST            = stringPreferencesKey("ftps_host")
         val KEY_FTPS_PORT            = intPreferencesKey("ftps_port")
@@ -67,6 +70,7 @@ class SettingsViewModel(
         _driveEmail
     ) { prefs, signedIn, email ->
         SettingsState(
+            audioSource       = prefs[KEY_AUDIO_SOURCE]            ?: "VOICE_COMMUNICATION",
             autoRecordCall    = prefs[KEY_AUTO_RECORD_CALL]        ?: false,
             autoUpload        = prefs[KEY_AUTO_UPLOAD]             ?: false,
             uploadType        = prefs[KEY_UPLOAD_TYPE]             ?: "none",
@@ -173,6 +177,9 @@ class SettingsViewModel(
     // Drive設定
     fun setDriveFolderName(v: String) = save { it[KEY_DRIVE_FOLDER_NAME] = v }
 
+    // 録音ソース設定
+    fun setAudioSource(v: String) = save { it[KEY_AUDIO_SOURCE] = v }
+
     // FTPS設定
     fun setFtpsHost(v: String)     = save { it[KEY_FTPS_HOST] = v }
     fun setFtpsPort(v: Int)        = save { it[KEY_FTPS_PORT] = v }
@@ -198,6 +205,7 @@ class SettingsViewModel(
 }
 
 data class SettingsState(
+    val audioSource: String = "VOICE_COMMUNICATION",   // "VOICE_COMMUNICATION" / "MIC" / "VOICE_DOWNLINK" / "CAMCORDER" / "UNPROCESSED"
     val autoRecordCall: Boolean = false,
     val autoUpload: Boolean = false,
     val uploadType: String = "none",         // "drive" / "ftps" / "none"

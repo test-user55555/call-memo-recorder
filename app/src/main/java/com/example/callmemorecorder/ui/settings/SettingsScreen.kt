@@ -142,95 +142,18 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Google Drive 設定（常時表示・autoUpload非依存） ────────────
-            SectionCard(title = "Google Drive 設定") {
-                if (settings.isDriveSignedIn) {
-                    // ── サインイン済み ──
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Filled.CheckCircle, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("接続済み", fontWeight = FontWeight.Bold)
-                            Text(
-                                settings.driveEmail ?: "",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        OutlinedButton(onClick = {
-                            viewModel.signOutGoogle()
-                            viewModel.clearDriveTestResult()
-                        }) { Text("切断") }
-                    }
-
-                    Spacer(Modifier.height(8.dp))
-                    LabeledTextField(
-                        label = "アップロード先フォルダ名",
-                        value = settings.driveFolderName,
-                        placeholder = "例: CallMemoRecorder",
-                        onValueChange = { viewModel.setDriveFolderName(it) }
-                    )
-                    Text(
-                        "Googleドライブのルートにこの名前のフォルダが作成されます",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-
-                    Spacer(Modifier.height(8.dp))
-
-                    // ── 接続テストボタン（サインイン済み時に表示） ──
-                    Button(
-                        onClick = {
-                            viewModel.clearDriveTestResult()
-                            viewModel.testDriveConnection(settings.driveFolderName)
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.NetworkCheck, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("接続テスト（テストファイルをアップロード）")
-                    }
-
-                    // テスト結果
-                    driveTestResult?.let { result ->
-                        Spacer(Modifier.height(4.dp))
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = when {
-                                    result.startsWith("✅") -> MaterialTheme.colorScheme.primaryContainer
-                                    result == "テスト中..." -> MaterialTheme.colorScheme.surfaceVariant
-                                    else -> MaterialTheme.colorScheme.errorContainer
-                                }
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = result,
-                                modifier = Modifier.padding(12.dp),
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-
-                } else {
-                    // ── 未サインイン ──
+            // ── 録音ソース選択 ───────────────────────────────
+            if (settings.autoRecordCall) {
+                SectionCard(title = "録音ソース（試験用）") {
                     InfoBox(
-                        text = "Google アカウントでサインインすると、録音ファイルを自動的に Google Drive にアップロードできます。",
+                        text = "端末によって録音できるソースが異なります。録音できない場合は別のソースをお試しください。",
                         isWarning = false
                     )
-                    Spacer(Modifier.height(4.dp))
-                    Button(
-                        onClick = { signInLauncher.launch(viewModel.getGoogleSignInIntent()) },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.AccountCircle, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Google アカウントで接続")
-                    }
+                    Spacer(Modifier.height(8.dp))
+                    AudioSourceSelector(
+                        selected = settings.audioSource,
+                        onSelect = { viewModel.setAudioSource(it) }
+                    )
                 }
             }
 
@@ -255,13 +178,63 @@ fun SettingsScreen(
                         selected = settings.uploadType,
                         onSelect = { viewModel.setUploadType(it) }
                     )
-                    // drive選択時・未接続の警告
-                    if (settings.uploadType == "drive" && !settings.isDriveSignedIn) {
-                        Spacer(Modifier.height(4.dp))
-                        InfoBox(
-                            text = "⚠️ 上の「Google Drive 設定」でアカウントに接続してください",
-                            isWarning = true
+                }
+            }
+
+            // ── Google Drive 設定（autoUpload=true & uploadType="drive" の場合のみ表示） ──
+            if (settings.autoUpload && settings.uploadType == "drive") {
+                SectionCard(title = "Google Drive 設定") {
+                    if (settings.isDriveSignedIn) {
+                        // ── サインイン済み ──
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Filled.CheckCircle, contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("接続済み", fontWeight = FontWeight.Bold)
+                                Text(
+                                    settings.driveEmail ?: "",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            OutlinedButton(onClick = {
+                                viewModel.signOutGoogle()
+                                viewModel.clearDriveTestResult()
+                            }) { Text("切断") }
+                        }
+
+                        Spacer(Modifier.height(8.dp))
+                        LabeledTextField(
+                            label = "アップロード先フォルダ名",
+                            value = settings.driveFolderName,
+                            placeholder = "例: CallMemoRecorder",
+                            onValueChange = { viewModel.setDriveFolderName(it) }
                         )
+                        Text(
+                            "Googleドライブのルートにこの名前のフォルダが作成されます",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                    } else {
+                        // ── 未サインイン ──
+                        InfoBox(
+                            text = "Google アカウントでサインインすると、録音ファイルを自動的に Google Drive にアップロードできます。",
+                            isWarning = false
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Button(
+                            onClick = { signInLauncher.launch(viewModel.getGoogleSignInIntent()) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Filled.AccountCircle, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("Google アカウントで接続")
+                        }
                     }
                 }
             }
@@ -274,6 +247,60 @@ fun SettingsScreen(
                         viewModel = viewModel,
                         ftpsTestResult = ftpsTestResult
                     )
+                }
+            }
+
+            // ── 接続テスト（Drive サインイン済みの場合のみ表示・ストレージ枠の前に独立配置） ──
+            if (settings.autoUpload && settings.uploadType == "drive" && settings.isDriveSignedIn) {
+                SectionCard(title = "Google Drive 接続テスト") {
+                    Text(
+                        "設定したフォルダに「接続テスト.txt」をアップロードして接続を確認します。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            viewModel.clearDriveTestResult()
+                            viewModel.testDriveConnection(settings.driveFolderName)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Filled.NetworkCheck, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("接続テスト（テストファイルをアップロード）")
+                    }
+
+                    driveTestResult?.let { result ->
+                        Spacer(Modifier.height(4.dp))
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = when {
+                                    result.startsWith("✅") -> MaterialTheme.colorScheme.primaryContainer
+                                    result == "テスト中..." -> MaterialTheme.colorScheme.surfaceVariant
+                                    else -> MaterialTheme.colorScheme.errorContainer
+                                }
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (result == "テスト中...") {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Spacer(Modifier.width(8.dp))
+                                }
+                                Text(
+                                    text = result,
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -291,6 +318,43 @@ fun SettingsScreen(
             SectionCard(title = "アプリ情報") {
                 InfoRow(label = "バージョン", value = "1.3.0")
                 InfoRow(label = "ビルドタイプ", value = "DEBUG")
+            }
+        }
+    }
+}
+
+// ── 録音ソースセレクター ────────────────────────────────────────
+@Composable
+private fun AudioSourceSelector(selected: String, onSelect: (String) -> Unit) {
+    val options = listOf(
+        Triple("VOICE_COMMUNICATION", "VOICE_COMMUNICATION（推奨）", "通話音声に最適化。ほとんどの端末で動作"),
+        Triple("MIC",                 "MIC（マイク直接録音）",         "マイクを直接録音。自分の声のみ"),
+        Triple("CAMCORDER",           "CAMCORDER",                   "カメラ録音用ソース。一部端末で有効"),
+        Triple("VOICE_RECOGNITION",   "VOICE_RECOGNITION",           "音声認識用ソース"),
+        Triple("UNPROCESSED",         "UNPROCESSED（未加工）",         "Android 7.0以上。加工なしの生音声"),
+    )
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEach { (key, label, desc) ->
+            OutlinedCard(
+                onClick = { onSelect(key) },
+                modifier = Modifier.fillMaxWidth(),
+                border = if (selected == key)
+                    CardDefaults.outlinedCardBorder().copy(width = 2.dp)
+                else CardDefaults.outlinedCardBorder()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    RadioButton(selected = selected == key, onClick = { onSelect(key) })
+                    Spacer(Modifier.width(8.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(label, fontWeight = FontWeight.Medium,
+                            style = MaterialTheme.typography.bodyMedium)
+                        Text(desc, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
             }
         }
     }
