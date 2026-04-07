@@ -5,6 +5,7 @@ import android.app.*
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
@@ -39,7 +40,14 @@ import java.util.concurrent.Executors
  *     CallStateListener ではなく TelephonyCallback を継承して EXTRA 番号を自分で取得
  *   - RecordingService/CallRecordingService への依存を排除し MediaRecorder を直接管理
  *   - START_STICKY で OS 強制終了後も自動再起動
- *   - VOICE_COMMUNICATION ソース失敗時は VOICE_DOWNLINK → MIC の順でフォールバック
+ *
+ * ■ 通話中録音の仕組み
+ *   - 通話中は Android の AudioManager が MODE_IN_CALL に切り替わり、
+ *     マイクがテレフォニーシステムに専有されるため MediaRecorder からアクセスできない。
+ *   - 録音開始前に AudioManager.mode = MODE_IN_COMMUNICATION へ変更することで
+ *     マイクをアプリに解放させる（通話自体は継続）。
+ *   - 録音終了後は元のモードに戻す。
+ *   - ※ 相手側音声（DOWNLINK）は Android の権限設計上、一般アプリでは取得不可。
  */
 class CallMonitorService : Service() {
 
@@ -80,6 +88,10 @@ class CallMonitorService : Service() {
     private var currentCallerName: String? = null
     private var callDirection: String = "UNKNOWN"
 
+    // ── AudioManager ──────────────────────────────────────────
+    private lateinit var audioManager: AudioManager
+    private var savedAudioMode: Int = AudioManager.MODE_NORMAL
+
     // ── 録音 ─────────────────────────────────────────────────
     private var mediaRecorder: MediaRecorder? = null
     private var currentOutputFile: File? = null
@@ -98,6 +110,7 @@ class CallMonitorService : Service() {
         // 最優先: onCreate で即座にフォアグラウンド通知を表示（5秒ルール対応）
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildMonitorNotification())
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         Log.i(TAG, "CallMonitorService onCreate (API ${Build.VERSION.SDK_INT})")
         // READ_PHONE_STATE 権限チェック後にリスナー登録
         if (hasPhoneStatePermission()) {
@@ -294,6 +307,17 @@ class CallMonitorService : Service() {
         val sourceKey = prefs[stringPreferencesKey("audio_source")] ?: "VOICE_COMMUNICATION"
         val preferredSource = audioSourceFromKey(sourceKey)
 
+        // ── AudioMode を MODE_IN_COMMUNICATION に切り替え ──────────────────
+        // 通話中は AudioManager が MODE_IN_CALL になっており、マイクがテレフォニーに専有される。
+        // MODE_IN_COMMUNICATION に変更することでアプリがマイクにアクセス可能になる。
+        savedAudioMode = audioManager.mode
+        Log.i(TAG, "AudioManager: savedMode=$savedAudioMode, switching to MODE_IN_COMMUNICATION")
+        try {
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to set AudioManager mode: ${e.message}")
+        }
+
         // 選択ソースを最優先に試行、失敗時は MIC でフォールバック
         val sources = if (preferredSource == MediaRecorder.AudioSource.MIC) {
             listOf(MediaRecorder.AudioSource.MIC)
@@ -313,6 +337,8 @@ class CallMonitorService : Service() {
         Log.e(TAG, "All audio sources failed – recording not started")
         isRecording = false
         currentOutputFile = null
+        // 失敗時はAudioModeを元に戻す
+        restoreAudioMode()
         updateNotification("通話を監視中")
     }
 
@@ -398,6 +424,16 @@ class CallMonitorService : Service() {
         }
     }
 
+    /** AudioMode を録音前の状態に戻す */
+    private fun restoreAudioMode() {
+        try {
+            Log.i(TAG, "AudioManager: restoring mode to $savedAudioMode")
+            audioManager.mode = savedAudioMode
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to restore AudioManager mode: ${e.message}")
+        }
+    }
+
     /** @return RecordingResult? – null なら録音していなかった or 短すぎた */
     @Synchronized
     private fun stopRecording(): RecordingResult? {
@@ -457,6 +493,9 @@ class CallMonitorService : Service() {
             try { capturedRecorder?.release() } catch (_: Exception) {}
             filePath?.let { try { File(it).delete() } catch (_: Exception) {} }
             null
+        } finally {
+            // 録音終了後は必ず AudioMode を元に戻す
+            restoreAudioMode()
         }
     }
 

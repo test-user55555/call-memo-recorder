@@ -12,8 +12,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.*import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -220,6 +219,49 @@ fun SettingsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
+                        Spacer(Modifier.height(4.dp))
+                        HorizontalDivider()
+                        Spacer(Modifier.height(4.dp))
+
+                        // ── Drive設定枠内の接続テストボタン ──
+                        Button(
+                            onClick = {
+                                viewModel.clearDriveTestResult()
+                                viewModel.testDriveConnection(settings.driveFolderName)
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Filled.NetworkCheck, contentDescription = null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("接続テスト（テストファイルをアップロード）")
+                        }
+                        driveTestResult?.let { result ->
+                            Card(
+                                colors = CardDefaults.cardColors(
+                                    containerColor = when {
+                                        result.startsWith("✅") -> MaterialTheme.colorScheme.primaryContainer
+                                        result == "テスト中..." -> MaterialTheme.colorScheme.surfaceVariant
+                                        else -> MaterialTheme.colorScheme.errorContainer
+                                    }
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (result == "テスト中...") {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(16.dp),
+                                            strokeWidth = 2.dp
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    Text(text = result, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+
                     } else {
                         // ── 未サインイン ──
                         InfoBox(
@@ -247,60 +289,6 @@ fun SettingsScreen(
                         viewModel = viewModel,
                         ftpsTestResult = ftpsTestResult
                     )
-                }
-            }
-
-            // ── 接続テスト（Drive サインイン済みの場合のみ表示・ストレージ枠の前に独立配置） ──
-            if (settings.autoUpload && settings.uploadType == "drive" && settings.isDriveSignedIn) {
-                SectionCard(title = "Google Drive 接続テスト") {
-                    Text(
-                        "設定したフォルダに「接続テスト.txt」をアップロードして接続を確認します。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Button(
-                        onClick = {
-                            viewModel.clearDriveTestResult()
-                            viewModel.testDriveConnection(settings.driveFolderName)
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Icon(Icons.Filled.NetworkCheck, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("接続テスト（テストファイルをアップロード）")
-                    }
-
-                    driveTestResult?.let { result ->
-                        Spacer(Modifier.height(4.dp))
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = when {
-                                    result.startsWith("✅") -> MaterialTheme.colorScheme.primaryContainer
-                                    result == "テスト中..." -> MaterialTheme.colorScheme.surfaceVariant
-                                    else -> MaterialTheme.colorScheme.errorContainer
-                                }
-                            ),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(12.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                if (result == "テスト中...") {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                    Spacer(Modifier.width(8.dp))
-                                }
-                                Text(
-                                    text = result,
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                        }
-                    }
                 }
             }
 
