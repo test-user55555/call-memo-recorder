@@ -41,6 +41,10 @@ class DriveRepository(private val context: Context) {
     companion object {
         private const val TAG = "DriveRepository"
         private const val APP_NAME = "CallMemoRecorder"
+        // Web アプリケーション用 OAuth クライアントID
+        // Google Cloud Console → 認証情報 → OAuth クライアントID（ウェブアプリ）で取得
+        private const val WEB_CLIENT_ID =
+            "174314400551-uhhmtk96k7j3tgsdtbnssdnihcjleu0u.apps.googleusercontent.com"
     }
 
     val isEnabled: Boolean = true
@@ -54,6 +58,9 @@ class DriveRepository(private val context: Context) {
 
     private fun buildGso() = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
         .requestEmail()
+        // Web アプリケーション用クライアントID を指定することで
+        // Drive スコープの OAuth トークンが正しく発行される（DEVELOPER_ERROR code=10 の解消）
+        .requestIdToken(WEB_CLIENT_ID)
         .requestScopes(Scope(DriveScopes.DRIVE_FILE))
         .build()
 
