@@ -151,28 +151,15 @@ class CallRecordingAccessibilityService : AccessibilityService() {
                 // 着信か発信かを判断
                 lastCallDirection = if (prev == TelephonyManager.CALL_STATE_RINGING) "INCOMING" else "OUTGOING"
                 Log.i(TAG, "Call started (OFFHOOK, dir=$lastCallDirection)")
-                serviceScope.launch {
-                    if (isAutoRecordEnabled()) {
-                        delay(RECORD_START_DELAY_MS)
-                        startRecording()
-                    }
-                }
+                // ★ v1.8.0: 録音は CallMonitorService に統一。
+                //    本サービスでの録音は行わない（2重録音防止）
             }
             // 通話終了: OFFHOOK → IDLE
             currentState == TelephonyManager.CALL_STATE_IDLE &&
                     prev == TelephonyManager.CALL_STATE_OFFHOOK -> {
                 val direction = lastCallDirection
-                Log.i(TAG, "Call ended (IDLE, dir=$direction)")
-                serviceScope.launch {
-                    val result = stopRecording()
-                    if (result is RecordingResult.Success) {
-                        // 通話ログから番号・名前を取得（少し遅延して通話ログへの記録を待つ）
-                        delay(2000L)
-                        val number = resolveNumberFromCallLog(direction)
-                        val name   = number?.let { resolveContactName(it) }
-                        saveAndUpload(result.filePath, result.durationMs, direction, number, name)
-                    }
-                }
+                Log.i(TAG, "Call ended (IDLE, dir=$direction) – 録音はCallMonitorServiceが担当")
+                // ★ v1.8.0: 録音保存も CallMonitorService が担当。何もしない。
             }
             // 着信RINGING検知（発着信判断用）
             currentState == TelephonyManager.CALL_STATE_RINGING &&
