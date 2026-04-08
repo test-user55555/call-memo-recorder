@@ -28,29 +28,28 @@ fun SetupScreen(
     val context = LocalContext.current
     var agreed = remember { mutableStateOf(false) }
 
-    // 各権限の許可状態（再コンポーズ時に再チェックできるよう mutableState を使用）
+    fun checkPermission(perm: String) =
+        ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
+
     var micGranted by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                PackageManager.PERMISSION_GRANTED
-        )
+        mutableStateOf(checkPermission(Manifest.permission.RECORD_AUDIO))
     }
     var contactsGranted by remember {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) ==
-                PackageManager.PERMISSION_GRANTED
-        )
+        mutableStateOf(checkPermission(Manifest.permission.READ_CONTACTS))
     }
+    var phoneGranted by remember {
+        mutableStateOf(checkPermission(Manifest.permission.READ_PHONE_STATE))
+    }
+    // 通知権限: API 33+ のみ必要、それ未満は常に true
     var notifGranted by remember {
         mutableStateOf(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-                    PackageManager.PERMISSION_GRANTED
-            } else true // API 33 未満は通知権限不要
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+                checkPermission(Manifest.permission.POST_NOTIFICATIONS)
+            else true
         )
     }
 
-    // ActivityResultLauncher で各権限を個別リクエスト
+    // ── ランチャーはすべてトップレベルで宣言（Compose の規則） ──────────────
     val micLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> micGranted = granted }
@@ -59,12 +58,18 @@ fun SetupScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted -> contactsGranted = granted }
 
+    val phoneLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted -> phoneGranted = granted }
+
+    // POST_NOTIFICATIONS ランチャーは API に関わらずトップレベルで宣言する。
+    // API 33 未満では launch() しないので無害。
     val notifLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted -> notifGranted = granted }
 
-    // 必須権限（マイク）が許可されているか
-    val canProceed = agreed.value && micGranted
+    // 必須権限（マイク + 電話状態）がすべて許可されているか
+    val canProceed = agreed.value && micGranted && phoneGranted
 
     Column(
         modifier = Modifier
@@ -140,6 +145,15 @@ fun SetupScreen(
                     onRequest = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) }
                 )
 
+                // 電話状態権限（必須）
+                PermissionRow(
+                    title = "電話状態の読み取り",
+                    description = "通話の開始・終了を検知して自動録音するために必要です",
+                    isGranted = phoneGranted,
+                    isRequired = true,
+                    onRequest = { phoneLauncher.launch(Manifest.permission.READ_PHONE_STATE) }
+                )
+
                 // 連絡先権限
                 PermissionRow(
                     title = "連絡先へのアクセス",
@@ -149,14 +163,18 @@ fun SetupScreen(
                     onRequest = { contactsLauncher.launch(Manifest.permission.READ_CONTACTS) }
                 )
 
-                // 通知権限（Android 13+）
+                // 通知権限（Android 13+ のみ表示）
+                // ランチャーはトップレベルで宣言済み。API 33 未満では launch() しない。
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     PermissionRow(
                         title = "通知権限",
                         description = "録音中・通話監視中の通知表示に必要です",
                         isGranted = notifGranted,
                         isRequired = false,
-                        onRequest = { notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
+                        onRequest = {
+                            // API 33+ のみここに到達するので安全
+                            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
                     )
                 }
             }
@@ -206,8 +224,8 @@ fun SetupScreen(
             }
         }
 
-        // マイク権限が未許可の場合の警告
-        if (!micGranted) {
+        // 必須権限が未許可の場合の警告
+        if (!micGranted || !phoneGranted) {
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
@@ -221,7 +239,12 @@ fun SetupScreen(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        "マイク権限が必要です。「権限の確認」から「マイク権限」を許可してください。",
+                        buildString {
+                            if (!micGranted) append("マイク権限")
+                            if (!micGranted && !phoneGranted) append("・")
+                            if (!phoneGranted) append("電話状態の読み取り権限")
+                            append("が必要です。「権限の確認」から許可してください。")
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )
@@ -295,7 +318,12 @@ private fun PermissionRow(
                 tint = MaterialTheme.colorScheme.primary
             )
         } else {
-            TextButton(onClick = onRequest) { Text("許可する") }
+            Button(
+                onClick = onRequest,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text("許可する", style = MaterialTheme.typography.labelMedium)
+            }
         }
     }
 }

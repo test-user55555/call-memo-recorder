@@ -393,14 +393,98 @@ fun SettingsScreen(
                     checked = settings.deleteAfterUpload,
                     onCheckedChange = { viewModel.setDeleteAfterUpload(it) }
                 )
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                // ── 自動削除 ──────────────────────────────────────────────
+                SwitchRow(
+                    title = "古い録音を自動削除",
+                    description = if (settings.autoDeleteEnabled)
+                        "${settings.autoDeleteDays}日以上前のファイルを毎日自動で削除します"
+                    else
+                        "指定した日数以上経過したローカルファイルを1日1回自動削除します",
+                    checked = settings.autoDeleteEnabled,
+                    onCheckedChange = { viewModel.setAutoDeleteEnabled(it) }
+                )
+                if (settings.autoDeleteEnabled) {
+                    Spacer(Modifier.height(4.dp))
+                    AutoDeleteDaysSelector(
+                        days = settings.autoDeleteDays,
+                        onDaysChange = { viewModel.setAutoDeleteDays(it) }
+                    )
+                    InfoBox(
+                        text = "⚠️ 削除されたファイルは復元できません。Google Drive や FTPS へアップロード済みの場合のみ有効にすることをお勧めします。",
+                        isWarning = true
+                    )
+                }
             }
 
             // ── アプリ情報 ────────────────────────────────────
             SectionCard(title = "アプリ情報") {
-                InfoRow(label = "バージョン", value = "1.4.0")
+                InfoRow(label = "バージョン", value = "1.5.0")
                 InfoRow(label = "ビルドタイプ", value = "DEBUG")
             }
         }
+    }
+}
+
+// ── 自動削除日数セレクター ──────────────────────────────────────────────
+@Composable
+private fun AutoDeleteDaysSelector(days: Int, onDaysChange: (Int) -> Unit) {
+    val presets = listOf(7, 14, 30, 60, 90, 180)
+    var customMode by remember(days) { mutableStateOf(days !in presets) }
+    var customInput by remember(days) { mutableStateOf(if (days !in presets) days.toString() else "") }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "自動削除までの日数",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.Bold
+        )
+        // プリセット選択チップ
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            presets.forEach { preset ->
+                FilterChip(
+                    selected = !customMode && days == preset,
+                    onClick = {
+                        customMode = false
+                        customInput = ""
+                        onDaysChange(preset)
+                    },
+                    label = { Text("${preset}日", style = MaterialTheme.typography.labelSmall) }
+                )
+            }
+        }
+        // カスタム入力
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = if (customMode) customInput else "",
+                onValueChange = { input ->
+                    customMode = true
+                    customInput = input
+                    input.toIntOrNull()?.let { v ->
+                        if (v in 1..3650) onDaysChange(v)
+                    }
+                },
+                label = { Text("カスタム（日数）") },
+                placeholder = { Text("例: 45") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                modifier = Modifier.weight(1f),
+                singleLine = true,
+                isError = customMode && customInput.toIntOrNull()?.let { it < 1 || it > 3650 } == true
+            )
+            Text("日", style = MaterialTheme.typography.bodyMedium)
+        }
+        Text(
+            "現在の設定: ${days}日以上前のファイルを自動削除",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 

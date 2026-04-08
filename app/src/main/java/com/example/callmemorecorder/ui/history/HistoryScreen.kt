@@ -22,6 +22,8 @@ import com.example.callmemorecorder.domain.model.UploadStatus
 import com.example.callmemorecorder.util.formatDatetime
 import com.example.callmemorecorder.util.formatDuration
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,12 +32,18 @@ fun HistoryScreen(
     onNavigateBack: () -> Unit,
     viewModel: HistoryViewModel
 ) {
-    val records by viewModel.records.collectAsStateWithLifecycle()
+    val records       by viewModel.records.collectAsStateWithLifecycle()
     val playbackState by viewModel.playbackState.collectAsStateWithLifecycle()
+    val filter        by viewModel.filter.collectAsStateWithLifecycle()
 
-    var isSelectionMode by remember { mutableStateOf(false) }
-    var selectedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var showDeleteConfirm by remember { mutableStateOf(false) }
+    var isSelectionMode    by remember { mutableStateOf(false) }
+    var selectedIds        by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showDeleteConfirm  by remember { mutableStateOf(false) }
+    var showFilterPanel    by remember { mutableStateOf(false) }
+
+    // DatePicker dialog state
+    var showDateFromPicker by remember { mutableStateOf(false) }
+    var showDateToPicker   by remember { mutableStateOf(false) }
 
     LaunchedEffect(isSelectionMode) {
         if (!isSelectionMode) selectedIds = emptySet()
@@ -45,6 +53,7 @@ fun HistoryScreen(
         onDispose { viewModel.stopPlayback() }
     }
 
+    // ── 一括削除確認ダイアログ ──────────────────────────────────────────────
     if (showDeleteConfirm) {
         AlertDialog(
             onDismissRequest = { showDeleteConfirm = false },
@@ -57,9 +66,8 @@ fun HistoryScreen(
             },
             title = { Text("一括削除の確認") },
             text = {
-                val cnt = selectedIds.count()
                 Text(
-                    text = "${cnt}件の録音を削除します。\nこの操作は取り消せません。",
+                    text = "${selectedIds.count()}件の録音を削除します。\nこの操作は取り消せません。",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },
@@ -87,6 +95,54 @@ fun HistoryScreen(
             }
         )
     }
+
+    // ── 開始日 DatePicker ──────────────────────────────────────────────────
+    if (showDateFromPicker) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = filter.dateFrom ?: System.currentTimeMillis()
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDateFromPicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.setDateFrom(datePickerState.selectedDateMillis)
+                    showDateFromPicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDateFromPicker = false }) { Text("キャンセル") }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+
+    // ── 終了日 DatePicker ──────────────────────────────────────────────────
+    if (showDateToPicker) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = filter.dateTo ?: System.currentTimeMillis()
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDateToPicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.setDateTo(datePickerState.selectedDateMillis)
+                    showDateToPicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDateToPicker = false }) { Text("キャンセル") }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+
+    // フィルターが有効かどうか
+    val isFilterActive = filter.query.isNotBlank() ||
+            filter.dateFrom != null ||
+            filter.dateTo != null ||
+            filter.directionFilter != null
 
     Scaffold(
         topBar = {
@@ -136,6 +192,25 @@ fun HistoryScreen(
                             )
                         }
                     } else {
+                        // 検索ボタン
+                        IconButton(onClick = { showFilterPanel = !showFilterPanel }) {
+                            BadgedBox(
+                                badge = {
+                                    if (isFilterActive) {
+                                        Badge()
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    Icons.Filled.Search,
+                                    contentDescription = "検索・絞り込み",
+                                    tint = if (isFilterActive)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        LocalContentColor.current
+                                )
+                            }
+                        }
                         if (records.isNotEmpty()) {
                             IconButton(onClick = { isSelectionMode = true }) {
                                 Icon(Icons.Filled.DeleteSweep, contentDescription = "一括削除")
@@ -146,73 +221,275 @@ fun HistoryScreen(
             )
         }
     ) { paddingValues ->
-        if (records.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues),
-                contentAlignment = Alignment.Center
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            // ── 検索・フィルターパネル ──────────────────────────────────────
+            AnimatedVisibility(
+                visible = showFilterPanel,
+                enter = expandVertically(),
+                exit = shrinkVertically()
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
+                FilterPanel(
+                    filter = filter,
+                    onQueryChange = viewModel::setQuery,
+                    onDateFromClick = { showDateFromPicker = true },
+                    onDateToClick = { showDateToPicker = true },
+                    onClearDateFrom = { viewModel.setDateFrom(null) },
+                    onClearDateTo = { viewModel.setDateTo(null) },
+                    onDirectionChange = viewModel::setDirectionFilter,
+                    onSetDateRangeQuick = viewModel::setDateRangeDaysAgo,
+                    onClearAll = {
+                        viewModel.clearFilter()
+                    }
+                )
+            }
+
+            if (records.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            if (isFilterActive) Icons.Filled.SearchOff else Icons.Filled.Mic,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            if (isFilterActive) "条件に一致する録音がありません" else "録音履歴がありません",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (isFilterActive) {
+                            TextButton(onClick = { viewModel.clearFilter() }) {
+                                Text("フィルターをクリア")
+                            }
+                        } else {
+                            Text(
+                                "ホーム画面で録音を開始してください",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        Icons.Filled.Mic, contentDescription = null,
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        "録音履歴がありません",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        "ホーム画面で録音を開始してください",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(paddingValues),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(records, key = { it.id }) { record ->
-                    val isCurrentRecord = playbackState.recordId == record.id
-                    val isSelected = selectedIds.contains(record.id)
-                    RecordItemCard(
-                        record = record,
-                        isPlaying = isCurrentRecord && playbackState.isPlaying,
-                        isExpanded = isCurrentRecord && !isSelectionMode,
-                        playbackState = if (isCurrentRecord) playbackState else PlaybackState(),
-                        isSelectionMode = isSelectionMode,
-                        isSelected = isSelected,
-                        onPlayPause = { if (!isSelectionMode) viewModel.togglePlayback(record) },
-                        onSeekForward = { viewModel.seekForward() },
-                        onSeekBackward = { viewModel.seekBackward() },
-                        onSeekTo = { viewModel.seekTo(it) },
-                        onClick = {
-                            if (isSelectionMode) {
-                                selectedIds = if (isSelected) {
-                                    selectedIds - record.id
+                    items(records, key = { it.id }) { record ->
+                        val isCurrentRecord = playbackState.recordId == record.id
+                        val isSelected = selectedIds.contains(record.id)
+                        RecordItemCard(
+                            record = record,
+                            isPlaying = isCurrentRecord && playbackState.isPlaying,
+                            isExpanded = isCurrentRecord && !isSelectionMode,
+                            playbackState = if (isCurrentRecord) playbackState else PlaybackState(),
+                            isSelectionMode = isSelectionMode,
+                            isSelected = isSelected,
+                            onPlayPause = { if (!isSelectionMode) viewModel.togglePlayback(record) },
+                            onSeekForward = { viewModel.seekForward() },
+                            onSeekBackward = { viewModel.seekBackward() },
+                            onSeekTo = { viewModel.seekTo(it) },
+                            onClick = {
+                                if (isSelectionMode) {
+                                    selectedIds = if (isSelected) {
+                                        selectedIds - record.id
+                                    } else {
+                                        selectedIds + record.id
+                                    }
                                 } else {
-                                    selectedIds + record.id
+                                    onNavigateToDetail(record.id)
                                 }
-                            } else {
-                                onNavigateToDetail(record.id)
                             }
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+// ── 検索・絞り込みパネル ──────────────────────────────────────────────────
+
+@Composable
+private fun FilterPanel(
+    filter: SearchFilter,
+    onQueryChange: (String) -> Unit,
+    onDateFromClick: () -> Unit,
+    onDateToClick: () -> Unit,
+    onClearDateFrom: () -> Unit,
+    onClearDateTo: () -> Unit,
+    onDirectionChange: (CallDirection?) -> Unit,
+    onSetDateRangeQuick: (Int) -> Unit,
+    onClearAll: () -> Unit
+) {
+    val dateFormatter = remember { SimpleDateFormat("yyyy/MM/dd", Locale.getDefault()) }
+
+    Surface(
+        tonalElevation = 2.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            // ── フリーワード検索 ──────────────────────────────────────────
+            OutlinedTextField(
+                value = filter.query,
+                onValueChange = onQueryChange,
+                label = { Text("名前・番号で検索") },
+                leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (filter.query.isNotBlank()) {
+                        IconButton(onClick = { onQueryChange("") }) {
+                            Icon(Icons.Filled.Clear, contentDescription = "クリア")
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true
+            )
+
+            // ── 期間絞り込み ──────────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 開始日
+                OutlinedButton(
+                    onClick = onDateFromClick,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Filled.DateRange, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = if (filter.dateFrom != null)
+                            dateFormatter.format(Date(filter.dateFrom))
+                        else "開始日",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1
+                    )
+                    if (filter.dateFrom != null) {
+                        Spacer(Modifier.width(4.dp))
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = "クリア",
+                            modifier = Modifier
+                                .size(14.dp)
+                                .let { mod ->
+                                    mod
+                                }
+                        )
+                    }
+                }
+                Text("〜", style = MaterialTheme.typography.bodyMedium)
+                // 終了日
+                OutlinedButton(
+                    onClick = onDateToClick,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Filled.DateRange, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = if (filter.dateTo != null)
+                            dateFormatter.format(Date(filter.dateTo))
+                        else "終了日",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1
+                    )
+                }
+            }
+
+            // 開始日/終了日 クリアボタン（選択されている場合のみ）
+            if (filter.dateFrom != null || filter.dateTo != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (filter.dateFrom != null) {
+                        SuggestionChip(
+                            onClick = onClearDateFrom,
+                            label = { Text("開始日クリア", style = MaterialTheme.typography.labelSmall) },
+                            icon = { Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(12.dp)) }
+                        )
+                    }
+                    if (filter.dateTo != null) {
+                        SuggestionChip(
+                            onClick = onClearDateTo,
+                            label = { Text("終了日クリア", style = MaterialTheme.typography.labelSmall) },
+                            icon = { Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(12.dp)) }
+                        )
+                    }
+                }
+            }
+
+            // ── 期間クイック選択 ──────────────────────────────────────────
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                listOf(7 to "7日", 30 to "30日", 90 to "3ヶ月").forEach { (days, label) ->
+                    FilterChip(
+                        selected = false,
+                        onClick = { onSetDateRangeQuick(days) },
+                        label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+            }
+
+            // ── 発着信フィルター ──────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "方向:",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                listOf(
+                    null to "すべて",
+                    CallDirection.INCOMING to "着信",
+                    CallDirection.OUTGOING to "発信"
+                ).forEach { (dir, label) ->
+                    FilterChip(
+                        selected = filter.directionFilter == dir,
+                        onClick = { onDirectionChange(dir) },
+                        label = { Text(label, style = MaterialTheme.typography.labelSmall) }
+                    )
+                }
+            }
+
+            // ── 全クリアボタン ──────────────────────────────────────────
+            val isFilterActive = filter.query.isNotBlank() ||
+                    filter.dateFrom != null ||
+                    filter.dateTo != null ||
+                    filter.directionFilter != null
+            if (isFilterActive) {
+                TextButton(
+                    onClick = onClearAll,
+                    modifier = Modifier.align(Alignment.End)
+                ) {
+                    Icon(Icons.Filled.ClearAll, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("すべてクリア", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+    }
+}
+
+// ── レコードカード ────────────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

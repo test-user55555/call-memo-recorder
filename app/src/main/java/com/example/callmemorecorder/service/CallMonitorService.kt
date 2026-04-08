@@ -509,19 +509,29 @@ class CallMonitorService : Service() {
         direction: String
     ) {
         try {
-            val dateStr = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date())
-            val dirLabel = when (direction) {
-                "INCOMING" -> "着信"; "OUTGOING" -> "発信"; else -> "通話"
+            // ── ファイルを正式名にリネーム ──────────────────────────────────
+            val now = System.currentTimeMillis()
+            val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date(now))
+            val newFileName = buildFileName(timestamp, direction, name, number)
+            val originalFile = File(filePath)
+            val renamedFile = File(originalFile.parent ?: filesDir.absolutePath, newFileName)
+            val finalPath = if (originalFile.renameTo(renamedFile)) {
+                Log.i(TAG, "Renamed: ${originalFile.name} -> $newFileName")
+                renamedFile.absolutePath
+            } else {
+                Log.w(TAG, "Rename failed, keeping original: $filePath")
+                filePath
             }
-            val displayName = name ?: number ?: "不明"
-            val title = "${dirLabel}_${displayName}_${dateStr}"
+
+            // タイトルはファイル名から拡張子を除いたもの
+            val title = File(finalPath).nameWithoutExtension
 
             val record = RecordItem(
                 id = UUID.randomUUID().toString(),
                 title = title,
-                createdAt = System.currentTimeMillis(),
+                createdAt = now,
                 durationMs = durationMs,
-                localPath = filePath,
+                localPath = finalPath,
                 mimeType = "audio/mp4",
                 status = RecordingStatus.SAVED,
                 uploadStatus = UploadStatus.NOT_STARTED,
@@ -542,7 +552,7 @@ class CallMonitorService : Service() {
             val autoUpload = prefs[booleanPreferencesKey("auto_upload")] ?: false
             if (autoUpload && uploadType != "none") {
                 WorkManager.getInstance(applicationContext)
-                    .enqueue(UploadWorker.buildWorkRequest(record.id, filePath, File(filePath).name))
+                    .enqueue(UploadWorker.buildWorkRequest(record.id, finalPath, File(finalPath).name))
                 Log.i(TAG, "Upload queued for ${record.id}")
             }
         } catch (e: Exception) {
@@ -552,10 +562,37 @@ class CallMonitorService : Service() {
 
     // ── ファイル ──────────────────────────────────────────────
 
+    /**
+     * 一時録音ファイルを作成する（仮名: tmp_yyyymmdd-hhmmss.m4a）。
+     * 通話終了後に saveAndUpload() 内で正式ファイル名にリネームする。
+     */
     private fun createOutputFile(): File {
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+        val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
         val dir = File(filesDir, "recordings").also { it.mkdirs() }
-        return File(dir, "call_$timestamp.m4a")
+        return File(dir, "tmp_$timestamp.m4a")
+    }
+
+    /**
+     * 正式ファイル名を生成する。
+     * 形式: yyyyMMdd-HHmmss_発着_名前_番号.m4a
+     *   - 着信: 「着」、発信: 「発」、不明: 「通話」
+     *   - 名前が取得できない場合: 「不明」
+     *   - 番号が取得できない場合: 番号部分を省略（名前_のみ）
+     *   - ファイル名に使えない文字（/ \ : * ? " < > | 空白等）はアンダースコアに置換
+     */
+    private fun buildFileName(timestamp: String, direction: String, name: String?, number: String?): String {
+        val dirLabel = when (direction) {
+            "INCOMING" -> "着"
+            "OUTGOING" -> "発"
+            else       -> "通話"
+        }
+        val safeName   = (name   ?: "不明").replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
+        val safeNumber = number?.replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
+        return if (safeNumber != null) {
+            "${timestamp}_${dirLabel}_${safeName}_${safeNumber}.m4a"
+        } else {
+            "${timestamp}_${dirLabel}_${safeName}.m4a"
+        }
     }
 
     // ── 連絡先解決 ─────────────────────────────────────────────

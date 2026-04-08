@@ -12,6 +12,7 @@ import com.example.callmemorecorder.data.repository.DriveRepository
 import com.example.callmemorecorder.data.repository.FtpsConfig
 import com.example.callmemorecorder.data.repository.FtpsRepository
 import com.example.callmemorecorder.service.CallMonitorService
+import com.example.callmemorecorder.worker.AutoDeleteWorker
 import com.google.android.gms.auth.api.signin.GoogleSignInAccount
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -41,6 +42,8 @@ class SettingsViewModel(
         val KEY_FTPS_USERNAME        = stringPreferencesKey("ftps_username")
         val KEY_FTPS_PASSWORD        = stringPreferencesKey("ftps_password")
         val KEY_FTPS_PATH            = stringPreferencesKey("ftps_path")
+        val KEY_AUTO_DELETE_ENABLED  = booleanPreferencesKey("auto_delete_enabled")
+        val KEY_AUTO_DELETE_DAYS     = intPreferencesKey("auto_delete_days")
 
         fun factory(container: AppContainer) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
@@ -103,6 +106,8 @@ class SettingsViewModel(
                     ftpsUsername         = prefs[KEY_FTPS_USERNAME]          ?: "",
                     ftpsPassword         = prefs[KEY_FTPS_PASSWORD]          ?: "",
                     ftpsPath             = prefs[KEY_FTPS_PATH]              ?: "/recordings",
+                    autoDeleteEnabled    = prefs[KEY_AUTO_DELETE_ENABLED]    ?: false,
+                    autoDeleteDays       = prefs[KEY_AUTO_DELETE_DAYS]       ?: 30,
                 )
             }
             .stateIn(viewModelScope, SharingStarted.Eagerly, SettingsState())
@@ -210,6 +215,13 @@ class SettingsViewModel(
     fun setFtpsPassword(v: String)        = save { it[KEY_FTPS_PASSWORD] = v }
     fun setFtpsPath(v: String)            = save { it[KEY_FTPS_PATH] = v }
 
+    fun setAutoDeleteEnabled(v: Boolean) {
+        save { it[KEY_AUTO_DELETE_ENABLED] = v }
+        AutoDeleteWorker.reschedule(context, v)
+    }
+
+    fun setAutoDeleteDays(v: Int) = save { it[KEY_AUTO_DELETE_DAYS] = v }
+
     fun testFtpsConnection(host: String, port: Int, user: String, pass: String, path: String) {
         viewModelScope.launch {
             _ftpsTestResult.value = "テスト中..."
@@ -241,4 +253,6 @@ data class SettingsState(
     val ftpsUsername:         String  = "",
     val ftpsPassword:         String  = "",
     val ftpsPath:             String  = "/recordings",
+    val autoDeleteEnabled:    Boolean = false,
+    val autoDeleteDays:       Int     = 30,
 )
