@@ -37,8 +37,9 @@ class RecordingService : Service() {
         const val ACTION_START_RECORDING = "com.example.callmemorecorder.START_RECORDING"
         const val ACTION_STOP_RECORDING = "com.example.callmemorecorder.STOP_RECORDING"
 
-        private const val SAMPLE_RATE = 44100
-        private const val BIT_RATE = 128000
+        // 通話録音最適化: 16kHz モノラル 48kbps
+        private const val SAMPLE_RATE = 16000
+        private const val BIT_RATE = 48000
 
         fun startIntent(context: Context): Intent {
             return Intent(context, RecordingService::class.java).apply {
@@ -120,8 +121,9 @@ class RecordingService : Service() {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioSamplingRate(SAMPLE_RATE)
                 setAudioEncodingBitRate(BIT_RATE)
+                setAudioSamplingRate(SAMPLE_RATE)
+                setAudioChannels(1)  // モノラル録音
                 setOutputFile(outputFile.absolutePath)
                 prepare()
                 start()

@@ -57,8 +57,9 @@ class CallMonitorService : Service() {
         const val NOTIFICATION_ID = 3001
         const val CHANNEL_ID = "call_monitor_channel"
 
-        private const val SAMPLE_RATE = 44100
-        private const val BIT_RATE = 128000
+        // 通話録音最適化: 16kHz モノラル 48kbps（ファイルサイズ削減 + 通話音声に十分な品質）
+        private const val SAMPLE_RATE = 16000
+        private const val BIT_RATE = 48000
 
         // 通話開始から録音を開始するまでの遅延（ms）
         // 通話が確立するまでに少し時間が必要（短すぎると録音が始まる前に通話が終わることも）
@@ -424,8 +425,9 @@ class CallMonitorService : Service() {
                 setAudioSource(audioSource)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setAudioSamplingRate(SAMPLE_RATE)
                 setAudioEncodingBitRate(BIT_RATE)
+                setAudioSamplingRate(SAMPLE_RATE)
+                setAudioChannels(1)  // モノラル録音
                 setOutputFile(outputFile.absolutePath)
                 setOnErrorListener { _, what, extra ->
                     Log.e(TAG, "MediaRecorder error: what=$what, extra=$extra")
