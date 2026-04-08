@@ -67,6 +67,7 @@ fun SettingsScreen(
         add(Manifest.permission.READ_PHONE_STATE)
         add(Manifest.permission.RECORD_AUDIO)
         add(Manifest.permission.READ_CONTACTS)
+        add(Manifest.permission.READ_CALL_LOG)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             add(Manifest.permission.POST_NOTIFICATIONS)
         }
@@ -419,7 +420,7 @@ fun SettingsScreen(
 
             // ── アプリ情報 ────────────────────────────────────
             SectionCard(title = "アプリ情報") {
-                InfoRow(label = "バージョン", value = "1.5.0")
+                InfoRow(label = "バージョン", value = "1.6.0")
                 InfoRow(label = "ビルドタイプ", value = "DEBUG")
             }
         }

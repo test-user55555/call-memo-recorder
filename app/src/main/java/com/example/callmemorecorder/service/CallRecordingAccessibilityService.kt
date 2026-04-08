@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Build
+import android.provider.CallLog
+import android.provider.ContactsContract
 import android.telephony.TelephonyManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -67,6 +69,7 @@ class CallRecordingAccessibilityService : AccessibilityService() {
 
     @Volatile private var isRecording = false
     @Volatile private var lastCallState = TelephonyManager.CALL_STATE_IDLE
+    @Volatile private var lastCallDirection = "UNKNOWN"
 
     // ── ライフサイクル ────────────────────────────────────────
 
@@ -145,7 +148,9 @@ class CallRecordingAccessibilityService : AccessibilityService() {
             // 通話開始: IDLE/RINGING → OFFHOOK
             currentState == TelephonyManager.CALL_STATE_OFFHOOK &&
                     prev != TelephonyManager.CALL_STATE_OFFHOOK -> {
-                Log.i(TAG, "Call started (OFFHOOK)")
+                // 着信か発信かを判断
+                lastCallDirection = if (prev == TelephonyManager.CALL_STATE_RINGING) "INCOMING" else "OUTGOING"
+                Log.i(TAG, "Call started (OFFHOOK, dir=$lastCallDirection)")
                 serviceScope.launch {
                     if (isAutoRecordEnabled()) {
                         delay(RECORD_START_DELAY_MS)
@@ -156,13 +161,23 @@ class CallRecordingAccessibilityService : AccessibilityService() {
             // 通話終了: OFFHOOK → IDLE
             currentState == TelephonyManager.CALL_STATE_IDLE &&
                     prev == TelephonyManager.CALL_STATE_OFFHOOK -> {
-                Log.i(TAG, "Call ended (IDLE)")
+                val direction = lastCallDirection
+                Log.i(TAG, "Call ended (IDLE, dir=$direction)")
                 serviceScope.launch {
                     val result = stopRecording()
                     if (result is RecordingResult.Success) {
-                        saveAndUpload(result.filePath, result.durationMs)
+                        // 通話ログから番号・名前を取得（少し遅延して通話ログへの記録を待つ）
+                        delay(2000L)
+                        val number = resolveNumberFromCallLog(direction)
+                        val name   = number?.let { resolveContactName(it) }
+                        saveAndUpload(result.filePath, result.durationMs, direction, number, name)
                     }
                 }
+            }
+            // 着信RINGING検知（発着信判断用）
+            currentState == TelephonyManager.CALL_STATE_RINGING &&
+                    prev == TelephonyManager.CALL_STATE_IDLE -> {
+                lastCallDirection = "INCOMING"
             }
         }
     }
@@ -324,37 +339,68 @@ class CallRecordingAccessibilityService : AccessibilityService() {
 
     // ── DB保存 & アップロード ─────────────────────────────────
 
-    private suspend fun saveAndUpload(filePath: String, durationMs: Long) {
+    private suspend fun saveAndUpload(
+        filePath: String,
+        durationMs: Long,
+        direction: String,
+        number: String?,
+        name: String?
+    ) {
         try {
-            val dateStr = SimpleDateFormat("MM/dd HH:mm", Locale.getDefault()).format(Date())
-            val title = "通話_${dateStr}"
+            // ファイルを正式名にリネーム
+            val now = System.currentTimeMillis()
+            val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date(now))
+            val dirLabel = when (direction) {
+                "INCOMING" -> "着"
+                "OUTGOING" -> "発"
+                else       -> "通話"
+            }
+            val safeName   = (name ?: "不明").replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
+            val safeNumber = number?.replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
+            val newFileName = if (safeNumber != null) {
+                "${timestamp}_${dirLabel}_${safeName}_${safeNumber}.m4a"
+            } else {
+                "${timestamp}_${dirLabel}_${safeName}.m4a"
+            }
 
+            val originalFile = File(filePath)
+            val renamedFile  = File(originalFile.parent ?: filesDir.absolutePath, newFileName)
+            val finalPath    = if (originalFile.renameTo(renamedFile)) {
+                Log.i(TAG, "Renamed: ${originalFile.name} -> $newFileName")
+                renamedFile.absolutePath
+            } else {
+                Log.w(TAG, "Rename failed, keeping: $filePath")
+                filePath
+            }
+
+            val title = File(finalPath).nameWithoutExtension
             val record = RecordItem(
                 id = UUID.randomUUID().toString(),
                 title = title,
-                createdAt = System.currentTimeMillis(),
+                createdAt = now,
                 durationMs = durationMs,
-                localPath = filePath,
+                localPath = finalPath,
                 mimeType = "audio/mp4",
                 status = RecordingStatus.SAVED,
                 uploadStatus = UploadStatus.NOT_STARTED,
                 transcriptionStatus = TranscriptionStatus.NOT_STARTED,
                 driveFileId = null, driveWebLink = null,
                 transcriptText = null, errorMessage = null,
-                updatedAt = System.currentTimeMillis(),
-                callerNumber = null,
-                callerName = null,
-                callDirection = CallDirection.UNKNOWN
+                updatedAt = now,
+                callerNumber = number,
+                callerName = name,
+                callDirection = runCatching { CallDirection.valueOf(direction) }
+                    .getOrDefault(CallDirection.UNKNOWN)
             )
             container.recordRepository.insertRecord(record)
-            Log.i(TAG, "Record saved: ${record.id}")
+            Log.i(TAG, "Record saved: ${record.id}, title=$title, number=$number")
 
             val prefs = container.dataStore.data.first()
             val uploadType = prefs[stringPreferencesKey("upload_type")] ?: "none"
             val autoUpload = prefs[booleanPreferencesKey("auto_upload")] ?: false
             if (autoUpload && uploadType != "none") {
                 WorkManager.getInstance(applicationContext)
-                    .enqueue(UploadWorker.buildWorkRequest(record.id, filePath, File(filePath).name))
+                    .enqueue(UploadWorker.buildWorkRequest(record.id, finalPath, File(finalPath).name))
                 Log.i(TAG, "Upload queued: ${record.id}")
             }
         } catch (e: Exception) {
@@ -362,7 +408,70 @@ class CallRecordingAccessibilityService : AccessibilityService() {
         }
     }
 
-    // ── ユーティリティ ────────────────────────────────────────
+    // ── 通話ログから番号を取得 ────────────────────────────────
+
+    private fun resolveNumberFromCallLog(direction: String, withinMs: Long = 60_000L): String? {
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_CALL_LOG) !=
+            PackageManager.PERMISSION_GRANTED) {
+            Log.d(TAG, "READ_CALL_LOG not granted")
+            return null
+        }
+        return try {
+            val callType = when (direction) {
+                "INCOMING" -> CallLog.Calls.INCOMING_TYPE
+                "OUTGOING" -> CallLog.Calls.OUTGOING_TYPE
+                else       -> null
+            }
+            val cutoff = System.currentTimeMillis() - withinMs
+            val selection = buildString {
+                append("${CallLog.Calls.DATE} >= ?")
+                if (callType != null) append(" AND ${CallLog.Calls.TYPE} = ?")
+            }
+            val selectionArgs = if (callType != null) arrayOf(cutoff.toString(), callType.toString())
+            else arrayOf(cutoff.toString())
+
+            contentResolver.query(
+                CallLog.Calls.CONTENT_URI,
+                arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.DATE),
+                selection, selectionArgs,
+                "${CallLog.Calls.DATE} DESC"
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val number = cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.NUMBER))
+                    Log.d(TAG, "Resolved from call log: $number (dir=$direction)")
+                    number.takeIf { it.isNotBlank() && it != "-1" }
+                } else null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveNumberFromCallLog failed: ${e.message}")
+            null
+        }
+    }
+
+    // ── 連絡先名の解決 ────────────────────────────────────────
+
+    private fun resolveContactName(phoneNumber: String): String? {
+        if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_CONTACTS) !=
+            PackageManager.PERMISSION_GRANTED) return null
+        return try {
+            val uri = android.net.Uri.withAppendedPath(
+                ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                android.net.Uri.encode(phoneNumber)
+            )
+            contentResolver.query(
+                uri,
+                arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null, null, null
+            )?.use { cursor ->
+                if (cursor.moveToFirst())
+                    cursor.getString(cursor.getColumnIndexOrThrow(ContactsContract.PhoneLookup.DISPLAY_NAME))
+                else null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveContactName failed: ${e.message}")
+            null
+        }
+    }
 
     private fun hasRecordAudioPermission(): Boolean =
         ContextCompat.checkSelfPermission(this, android.Manifest.permission.RECORD_AUDIO) ==

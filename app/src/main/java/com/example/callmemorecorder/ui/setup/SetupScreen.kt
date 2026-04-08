@@ -1,8 +1,11 @@
 package com.example.callmemorecorder.ui.setup
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -37,6 +40,9 @@ fun SetupScreen(
     var contactsGranted by remember {
         mutableStateOf(checkPermission(Manifest.permission.READ_CONTACTS))
     }
+    var callLogGranted by remember {
+        mutableStateOf(checkPermission(Manifest.permission.READ_CALL_LOG))
+    }
     var phoneGranted by remember {
         mutableStateOf(checkPermission(Manifest.permission.READ_PHONE_STATE))
     }
@@ -49,24 +55,80 @@ fun SetupScreen(
         )
     }
 
+    // 各権限が「一度拒否されたことがあるか」のフラグ
+    // (shouldShowRationale が false かつ未付与 = 「二度と表示しない」を選択済み)
+    // SetupScreen は Activity コンテキストを必要とするため、ここでは
+    // ランチャーが refused を返した場合にフォールバックするシンプルな方式を採用する
+    var notifDeniedPermanently    by remember { mutableStateOf(false) }
+    var micDeniedPermanently       by remember { mutableStateOf(false) }
+    var phoneDeniedPermanently     by remember { mutableStateOf(false) }
+    var contactsDeniedPermanently  by remember { mutableStateOf(false) }
+    var callLogDeniedPermanently   by remember { mutableStateOf(false) }
+
     // ── ランチャーはすべてトップレベルで宣言（Compose の規則） ──────────────
     val micLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted -> micGranted = granted }
+    ) { granted ->
+        micGranted = granted
+        if (!granted) micDeniedPermanently = true
+    }
 
     val contactsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted -> contactsGranted = granted }
+    ) { granted ->
+        contactsGranted = granted
+        if (!granted) contactsDeniedPermanently = true
+    }
+
+    val callLogLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        callLogGranted = granted
+        if (!granted) callLogDeniedPermanently = true
+    }
 
     val phoneLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted -> phoneGranted = granted }
+    ) { granted ->
+        phoneGranted = granted
+        if (!granted) phoneDeniedPermanently = true
+    }
 
     // POST_NOTIFICATIONS ランチャーは API に関わらずトップレベルで宣言する。
     // API 33 未満では launch() しないので無害。
     val notifLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { granted -> notifGranted = granted }
+    ) { granted ->
+        notifGranted = granted
+        if (!granted) notifDeniedPermanently = true
+    }
+
+    // アプリ設定画面を開くランチャー（「二度と表示しない」選択後のフォールバック用）
+    val appSettingsLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        // 設定画面から戻ったら権限を再チェック
+        micGranted      = checkPermission(Manifest.permission.RECORD_AUDIO)
+        phoneGranted    = checkPermission(Manifest.permission.READ_PHONE_STATE)
+        contactsGranted = checkPermission(Manifest.permission.READ_CONTACTS)
+        notifGranted    = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            checkPermission(Manifest.permission.POST_NOTIFICATIONS) else true
+        callLogGranted  = checkPermission(Manifest.permission.READ_CALL_LOG)
+        // 設定から戻ったらフラグをリセット（再試行できるようにする）
+        if (micGranted)      micDeniedPermanently      = false
+        if (phoneGranted)    phoneDeniedPermanently    = false
+        if (contactsGranted) contactsDeniedPermanently = false
+        if (notifGranted)    notifDeniedPermanently    = false
+        if (callLogGranted)  callLogDeniedPermanently  = false
+    }
+
+    fun openAppSettings() {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.fromParts("package", context.packageName, null)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        appSettingsLauncher.launch(intent)
+    }
 
     // 必須権限（マイク + 電話状態）がすべて許可されているか
     val canProceed = agreed.value && micGranted && phoneGranted
@@ -142,7 +204,9 @@ fun SetupScreen(
                     description = "音声録音に必要です",
                     isGranted = micGranted,
                     isRequired = true,
-                    onRequest = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+                    isDeniedPermanently = micDeniedPermanently,
+                    onRequest = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) },
+                    onOpenSettings = ::openAppSettings
                 )
 
                 // 電話状態権限（必須）
@@ -151,7 +215,9 @@ fun SetupScreen(
                     description = "通話の開始・終了を検知して自動録音するために必要です",
                     isGranted = phoneGranted,
                     isRequired = true,
-                    onRequest = { phoneLauncher.launch(Manifest.permission.READ_PHONE_STATE) }
+                    isDeniedPermanently = phoneDeniedPermanently,
+                    onRequest = { phoneLauncher.launch(Manifest.permission.READ_PHONE_STATE) },
+                    onOpenSettings = ::openAppSettings
                 )
 
                 // 連絡先権限
@@ -160,21 +226,60 @@ fun SetupScreen(
                     description = "録音履歴に通話相手の名前を表示するために使用します",
                     isGranted = contactsGranted,
                     isRequired = false,
-                    onRequest = { contactsLauncher.launch(Manifest.permission.READ_CONTACTS) }
+                    isDeniedPermanently = contactsDeniedPermanently,
+                    onRequest = { contactsLauncher.launch(Manifest.permission.READ_CONTACTS) },
+                    onOpenSettings = ::openAppSettings
+                )
+
+                // 通話ログ権限
+                PermissionRow(
+                    title = "通話履歴へのアクセス",
+                    description = "発着信の電話番号をファイル名・履歴に記録するために使用します",
+                    isGranted = callLogGranted,
+                    isRequired = false,
+                    isDeniedPermanently = callLogDeniedPermanently,
+                    onRequest = { callLogLauncher.launch(Manifest.permission.READ_CALL_LOG) },
+                    onOpenSettings = ::openAppSettings
                 )
 
                 // 通知権限（Android 13+ のみ表示）
-                // ランチャーはトップレベルで宣言済み。API 33 未満では launch() しない。
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     PermissionRow(
                         title = "通知権限",
                         description = "録音中・通話監視中の通知表示に必要です",
                         isGranted = notifGranted,
                         isRequired = false,
+                        isDeniedPermanently = notifDeniedPermanently,
                         onRequest = {
-                            // API 33+ のみここに到達するので安全
                             notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                        }
+                        },
+                        onOpenSettings = ::openAppSettings
+                    )
+                }
+            }
+        }
+
+        // 「二度と表示しない」が選択された権限がある場合の案内
+        val anyPermanentlyDenied = micDeniedPermanently || phoneDeniedPermanently ||
+                contactsDeniedPermanently || notifDeniedPermanently || callLogDeniedPermanently
+        if (anyPermanentlyDenied) {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Filled.Settings, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "「設定を開く」ボタンから端末の設定画面で権限を直接許可してください。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer
                     )
                 }
             }
@@ -287,7 +392,9 @@ private fun PermissionRow(
     description: String,
     isGranted: Boolean,
     isRequired: Boolean,
-    onRequest: () -> Unit
+    isDeniedPermanently: Boolean,
+    onRequest: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -311,18 +418,45 @@ private fun PermissionRow(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            // 拒否後のヒント
+            if (!isGranted && isDeniedPermanently) {
+                Text(
+                    "権限が拒否されています。「設定を開く」から許可してください。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
         }
-        if (isGranted) {
-            Icon(
-                Icons.Filled.CheckCircle, contentDescription = "許可済み",
-                tint = MaterialTheme.colorScheme.primary
-            )
-        } else {
-            Button(
-                onClick = onRequest,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-            ) {
-                Text("許可する", style = MaterialTheme.typography.labelMedium)
+        Spacer(Modifier.width(8.dp))
+        when {
+            isGranted -> {
+                Icon(
+                    Icons.Filled.CheckCircle, contentDescription = "許可済み",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+            isDeniedPermanently -> {
+                // 「二度と表示しない」選択済み → 設定画面へ誘導
+                OutlinedButton(
+                    onClick = onOpenSettings,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text("設定を開く", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+            else -> {
+                Button(
+                    onClick = onRequest,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text("許可する", style = MaterialTheme.typography.labelMedium)
+                }
             }
         }
     }

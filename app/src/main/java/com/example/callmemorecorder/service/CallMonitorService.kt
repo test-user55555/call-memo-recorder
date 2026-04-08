@@ -9,6 +9,7 @@ import android.media.AudioManager
 import android.media.MediaRecorder
 import android.os.Build
 import android.os.IBinder
+import android.provider.CallLog
 import android.provider.ContactsContract
 import android.telephony.PhoneStateListener
 import android.telephony.TelephonyCallback
@@ -156,6 +157,10 @@ class CallMonitorService : Service() {
         ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_CONTACTS) ==
                 PackageManager.PERMISSION_GRANTED
 
+    private fun hasReadCallLogPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, android.Manifest.permission.READ_CALL_LOG) ==
+                PackageManager.PERMISSION_GRANTED
+
     // ── 通話状態リスナー設定 ──────────────────────────────────
 
     @SuppressLint("MissingPermission")
@@ -280,16 +285,35 @@ class CallMonitorService : Service() {
     // ── 通話終了 ─────────────────────────────────────────────
 
     private fun onCallEnded() {
+        // 通話終了時点の番号・名前・方向をスナップショットとして保存
+        val snapshotNumber    = currentPhoneNumber
+        val snapshotName      = currentCallerName
+        val snapshotDirection = callDirection
+
         serviceScope.launch {
             val result = stopRecording()
             updateNotification("通話を監視中")
             if (result is RecordingResult.Success) {
+                // API 31+ で番号が取得できなかった場合は通話ログから補完（短い遅延後）
+                val finalNumber = if (snapshotNumber.isNullOrEmpty()) {
+                    delay(2000L)   // 通話ログに記録されるまで少し待つ
+                    resolveNumberFromCallLog(snapshotDirection).also { resolved ->
+                        if (resolved != null) Log.i(TAG, "Phone number resolved from call log: $resolved")
+                    }
+                } else {
+                    snapshotNumber
+                }
+
+                // 番号が取れたら連絡先名も補完
+                val finalName = snapshotName
+                    ?: finalNumber?.let { resolveContactName(it) }
+
                 saveAndUpload(
-                    filePath = result.filePath,
+                    filePath  = result.filePath,
                     durationMs = result.durationMs,
-                    number = currentPhoneNumber,
-                    name = currentCallerName,
-                    direction = callDirection
+                    number    = finalNumber,
+                    name      = finalName,
+                    direction = snapshotDirection
                 )
             }
         }
@@ -592,6 +616,58 @@ class CallMonitorService : Service() {
             "${timestamp}_${dirLabel}_${safeName}_${safeNumber}.m4a"
         } else {
             "${timestamp}_${dirLabel}_${safeName}.m4a"
+        }
+    }
+
+    // ── 通話ログから最新の番号を取得（API 31+ で TelephonyCallback に番号が渡されない場合の補完） ─────
+
+    /**
+     * 通話終了直後に通話ログから最新エントリの番号を取得する。
+     * READ_CALL_LOG 権限が必要。
+     * @param direction "INCOMING" or "OUTGOING"
+     * @param withinMs この時間（ms）以内の通話のみ対象（デフォルト60秒）
+     */
+    private fun resolveNumberFromCallLog(direction: String, withinMs: Long = 60_000L): String? {
+        if (!hasReadCallLogPermission()) {
+            Log.d(TAG, "READ_CALL_LOG permission not granted")
+            return null
+        }
+        return try {
+            val callType = when (direction) {
+                "INCOMING" -> CallLog.Calls.INCOMING_TYPE
+                "OUTGOING" -> CallLog.Calls.OUTGOING_TYPE
+                else       -> null
+            }
+            val cutoff = System.currentTimeMillis() - withinMs
+            val selection = buildString {
+                append("${CallLog.Calls.DATE} >= ?")
+                if (callType != null) append(" AND ${CallLog.Calls.TYPE} = ?")
+            }
+            val selectionArgs = if (callType != null) {
+                arrayOf(cutoff.toString(), callType.toString())
+            } else {
+                arrayOf(cutoff.toString())
+            }
+
+            contentResolver.query(
+                CallLog.Calls.CONTENT_URI,
+                arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.DATE, CallLog.Calls.TYPE),
+                selection,
+                selectionArgs,
+                "${CallLog.Calls.DATE} DESC"
+            )?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val number = cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.NUMBER))
+                    Log.d(TAG, "Resolved from call log: $number (dir=$direction)")
+                    number.takeIf { it.isNotBlank() && it != "-1" }
+                } else {
+                    Log.d(TAG, "No call log entry found within ${withinMs}ms (dir=$direction)")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "resolveNumberFromCallLog failed: ${e.message}")
+            null
         }
     }
 
