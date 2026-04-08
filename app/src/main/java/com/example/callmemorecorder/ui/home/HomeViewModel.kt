@@ -161,13 +161,31 @@ class HomeViewModel(
     private fun saveRecording(filePath: String, durationMs: Long) {
         viewModelScope.launch {
             try {
-                val fileName = File(filePath).name
+                // ── ファイルを正式名にリネーム（CallMonitorService と同じ形式） ──────
+                val now = System.currentTimeMillis()
+                val timestamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.getDefault())
+                    .format(java.util.Date(now))
+                val newFileName = "${timestamp}_手動.m4a"  // 手動録音は「手動」とする
+                
+                val originalFile = File(filePath)
+                val renamedFile = File(originalFile.parent ?: context.filesDir.absolutePath, newFileName)
+                val finalPath = if (originalFile.renameTo(renamedFile)) {
+                    Log.i(TAG, "Renamed: ${originalFile.name} -> $newFileName")
+                    renamedFile.absolutePath
+                } else {
+                    Log.w(TAG, "Rename failed, keeping original: $filePath")
+                    filePath
+                }
+                
+                // タイトルはファイル名から拡張子を除いたもの
+                val title = File(finalPath).nameWithoutExtension
+                
                 val record = RecordItem(
                     id = UUID.randomUUID().toString(),
-                    title = fileName.removeSuffix(".m4a"),
-                    createdAt = System.currentTimeMillis(),
+                    title = title,
+                    createdAt = now,
                     durationMs = durationMs,
-                    localPath = filePath,
+                    localPath = finalPath,
                     mimeType = "audio/mp4",
                     status = RecordingStatus.SAVED,
                     uploadStatus = UploadStatus.NOT_STARTED,
@@ -176,7 +194,10 @@ class HomeViewModel(
                     driveWebLink = null,
                     transcriptText = null,
                     errorMessage = null,
-                    updatedAt = System.currentTimeMillis()
+                    updatedAt = now,
+                    callerNumber = null,      // 手動録音は番号なし
+                    callerName = null,        // 手動録音は名前なし
+                    callDirection = CallDirection.UNKNOWN  // 手動録音は方向不明
                 )
                 recordRepository.insertRecord(record)
 
@@ -185,7 +206,7 @@ class HomeViewModel(
                 val uploadType = prefs[stringPreferencesKey("upload_type")] ?: "none"
                 val autoUpload = prefs[booleanPreferencesKey("auto_upload")] ?: false
                 if (autoUpload && uploadType != "none") {
-                    val req = UploadWorker.buildWorkRequest(record.id, filePath, fileName)
+                    val req = UploadWorker.buildWorkRequest(record.id, finalPath, File(finalPath).name)
                     workManager.enqueue(req)
                 }
                 _uiState.update { it.copy(lastSavedRecordId = record.id) }

@@ -203,9 +203,9 @@ class RecordingService : Service() {
     }
 
     private fun createOutputFile(): File {
-        val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
+        val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault())
             .format(Date())
-        val fileName = "rec_$timestamp.m4a"
+        val fileName = "tmp_$timestamp.m4a"  // 一時ファイル名（CallMonitorServiceと統一）
         val recordingDir = File(filesDir, "recordings").also { it.mkdirs() }
         return File(recordingDir, fileName)
     }

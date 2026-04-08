@@ -556,7 +556,7 @@ private fun RecordItemCard(
                         val dirLabel  = when (record.callDirection) {
                             CallDirection.INCOMING -> "着信"
                             CallDirection.OUTGOING -> "発信"
-                            CallDirection.UNKNOWN  -> "録音"
+                            CallDirection.UNKNOWN  -> "手動"  // 手動録音として表示
                         }
 
                         // 行1: 発着信ラベル + 名前（名前がなければ番号、どちらもなければ「不明」）
