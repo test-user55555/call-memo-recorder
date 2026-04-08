@@ -83,3 +83,16 @@ jobs:
           echo "Version: ${{ steps.version.outputs.version_name }} (code: ${{ steps.version.outputs.version_code }})"
           ls -lh app/build/outputs/apk/debug/CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug.apk
           echo "SHA256: $(sha256sum app/build/outputs/apk/debug/CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug.apk)"
+
+      - name: Show APK signing certificate SHA-1
+        run: |
+          echo "=== APK 署名証明書の SHA-1（Google Cloud Console に登録する値） ==="
+          APK="app/build/outputs/apk/debug/CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug.apk"
+          keytool -printcert -jarfile "$APK" 2>/dev/null | grep -E "SHA1|SHA256|Owner" || \
+          echo "(keytool -printcert 非対応の場合はdebug.keystoreの値を使用)"
+          echo ""
+          echo "=== debug.keystore の SHA-1 ==="
+          keytool -list -v \
+            -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -keypass android \
+            -alias androiddebugkey 2>/dev/null | grep -E "SHA1:|SHA256:" | head -2
