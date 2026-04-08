@@ -18,12 +18,28 @@ android {
     namespace = "com.example.callmemorecorder"
     compileSdk = 36
 
+    // ── 固定 debug.keystore 署名設定 ──────────────────────────────────────
+    // プロジェクトルートに debug.keystore を配置し、常に同じ署名でビルドする。
+    // これにより「上書きインストール失敗」「Google Sign-In DEVELOPER_ERROR code=10」を防ぐ。
+    signingConfigs {
+        getByName("debug") {
+            val keystoreFile = rootProject.file("debug.keystore")
+            if (keystoreFile.exists()) {
+                storeFile     = keystoreFile
+                storePassword = "android"
+                keyAlias      = "androiddebugkey"
+                keyPassword   = "android"
+            }
+            // ファイルが存在しない場合は Android デフォルトの debug.keystore が使われる
+        }
+    }
+
     defaultConfig {
         applicationId = "com.example.callmemorecorder"
         minSdk = 28
         targetSdk = 28
-        versionCode = 11
-        versionName = "1.3.8"
+        versionCode = 12
+        versionName = "1.3.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -50,6 +66,7 @@ android {
             isDebuggable = true
             // applicationIdSuffix を削除: suffixがあると更新インストール時に
             // 別アプリ扱いされてインストール失敗する
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

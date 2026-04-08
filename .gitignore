@@ -51,6 +51,7 @@ captures/
 # Uncomment the following lines if you do not want to check your keystore files in.
 #*.jks
 #*.keystore
+# debug.keystore はプロジェクト署名固定のため Git 管理対象（意図的に追跡）
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild
@@ -84,5 +85,6 @@ lint/tmp/
 .DS_Store
 Thumbs.db
 # Build: Mon Apr  6 05:24:22 UTC 2026
-debug.keystore
+# debug.keystore は署名固定のため Git で追跡（コメントアウト）
+# debug.keystore
 debug.keystore.b64

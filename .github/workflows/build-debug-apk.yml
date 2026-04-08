@@ -42,12 +42,19 @@ jobs:
           rm -rf ~/.gradle/caches/transforms-* || true
           echo "Cleaned transform caches"
 
-      # ── 固定 debug.keystore を復元（更新インストールの署名一致のため） ──
-      - name: Restore fixed debug keystore
+      # ── プロジェクト内 debug.keystore の SHA-1 を事前表示 ──
+      - name: Show project keystore SHA-1
         run: |
-          mkdir -p "$HOME/.android"
-          echo "${{ secrets.DEBUG_KEYSTORE_B64 }}" | base64 -d > "$HOME/.android/debug.keystore"
-          echo "Keystore restored: $(ls -lh $HOME/.android/debug.keystore)"
+          echo "=== プロジェクト内 debug.keystore ==="
+          if [ -f "debug.keystore" ]; then
+            keytool -list -v \
+              -keystore "debug.keystore" \
+              -storepass android -keypass android \
+              -alias androiddebugkey 2>/dev/null | grep -E "SHA1:|SHA256:|Owner:" | head -4
+            echo "Keystore size: $(ls -lh debug.keystore)"
+          else
+            echo "WARNING: debug.keystore not found in project root!"
+          fi
 
       - name: Extract version name
         id: version
@@ -77,22 +84,14 @@ jobs:
           path: app/build/outputs/apk/debug/CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug.apk
           retention-days: 30
 
-      - name: Show APK info
-        run: |
-          echo "=== APK Build Summary ==="
-          echo "Version: ${{ steps.version.outputs.version_name }} (code: ${{ steps.version.outputs.version_code }})"
-          ls -lh app/build/outputs/apk/debug/CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug.apk
-          echo "SHA256: $(sha256sum app/build/outputs/apk/debug/CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug.apk)"
-
       - name: Show APK signing certificate SHA-1
         run: |
-          echo "=== APK 署名証明書の SHA-1（Google Cloud Console に登録する値） ==="
+          echo "=== APK 実際の署名証明書 SHA-1 ==="
           APK="app/build/outputs/apk/debug/CallMemoRecorder-v${{ steps.version.outputs.version_name }}-debug.apk"
           keytool -printcert -jarfile "$APK" 2>/dev/null | grep -E "SHA1|SHA256|Owner" || \
-          echo "(keytool -printcert 非対応の場合はdebug.keystoreの値を使用)"
+          echo "(keytool -printcert 非対応)"
           echo ""
-          echo "=== debug.keystore の SHA-1 ==="
-          keytool -list -v \
-            -keystore "$HOME/.android/debug.keystore" \
-            -storepass android -keypass android \
-            -alias androiddebugkey 2>/dev/null | grep -E "SHA1:|SHA256:" | head -2
+          echo "=== APK Build Summary ==="
+          echo "Version: ${{ steps.version.outputs.version_name }} (code: ${{ steps.version.outputs.version_code }})"
+          ls -lh "$APK"
+          echo "SHA256: $(sha256sum $APK)"
