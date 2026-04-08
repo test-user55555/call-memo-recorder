@@ -161,15 +161,21 @@ class SettingsViewModel(
         }
     }
 
-    /** Drive 接続テスト */
+    /** Drive 接続テスト（progressCallback で各ステップの進捗を UI に通知） */
     fun testDriveConnection(folderName: String) {
         viewModelScope.launch {
-            _driveTestResult.value = "テスト中..."
-            val error = driveRepository.testConnection(folderName)
+            _driveTestResult.value = "⏳ テスト開始..."
+            val error = driveRepository.testConnection(folderName) { stepMsg ->
+                // IO スレッドから呼ばれるので Main に切り替えて StateFlow を更新
+                viewModelScope.launch(Dispatchers.Main) {
+                    _driveTestResult.value = stepMsg
+                }
+            }
+            // 最終結果を上書き
             _driveTestResult.value = if (error == null)
                 "✅ 接続成功！「$folderName」フォルダに「接続テスト.txt」を作成しました"
             else
-                "❌ $error"
+                error // DriveRepository 側ですでに ❌ プレフィックスを付けている
         }
     }
 

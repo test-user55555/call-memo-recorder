@@ -86,18 +86,24 @@ fun SettingsScreen(
     val signInLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        Log.d("SettingsScreen", "signInLauncher resultCode=${result.resultCode} data=${result.data}")
+        val resultCodeStr = when (result.resultCode) {
+            Activity.RESULT_OK       -> "RESULT_OK(-1)"
+            Activity.RESULT_CANCELED -> "RESULT_CANCELED(0)"
+            else                     -> "resultCode=${result.resultCode}"
+        }
+        Log.d("SettingsScreen", "signInLauncher $resultCodeStr data=${result.data}")
+        Toast.makeText(context, "サインイン結果受信: $resultCodeStr", Toast.LENGTH_SHORT).show()
 
         val intent = result.data
         if (intent == null) {
-            // Intent が null → resultCode だけで判断できないので getLastSignedInAccount を試みる
             val last = GoogleSignIn.getLastSignedInAccount(context)
             if (last?.email != null) {
-                Log.d("SettingsScreen", "intent=null, fallback to getLastSignedInAccount: ${last.email}")
+                Log.d("SettingsScreen", "intent=null, fallback getLastSignedInAccount: ${last.email}")
                 viewModel.onGoogleSignInSuccess(last, last.email)
-                Toast.makeText(context, "Google アカウントに接続しました: ${last.email}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "✅ 接続済み（フォールバック）: ${last.email}", Toast.LENGTH_LONG).show()
             } else {
                 Log.w("SettingsScreen", "intent=null かつ getLastSignedInAccount も null")
+                Toast.makeText(context, "⚠️ intent=null / アカウント取得不可", Toast.LENGTH_LONG).show()
             }
             return@rememberLauncherForActivityResult
         }
@@ -108,36 +114,37 @@ fun SettingsScreen(
             Log.d("SettingsScreen", "getSignedInAccountFromIntent success: ${account?.email}")
             if (account != null) {
                 viewModel.onGoogleSignInSuccess(account, account.email)
-                Toast.makeText(context, "Google アカウントに接続しました: ${account.email}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "✅ Google アカウント接続成功: ${account.email}", Toast.LENGTH_LONG).show()
             } else {
-                // account が null の場合は getLastSignedInAccount で補完
                 val last = GoogleSignIn.getLastSignedInAccount(context)
-                Log.d("SettingsScreen", "account=null, fallback getLastSignedInAccount: ${last?.email}")
+                Log.d("SettingsScreen", "account=null, fallback: ${last?.email}")
                 if (last?.email != null) {
                     viewModel.onGoogleSignInSuccess(last, last.email)
-                    Toast.makeText(context, "Google アカウントに接続しました: ${last.email}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "✅ 接続済み（account=null フォールバック）: ${last.email}", Toast.LENGTH_LONG).show()
                 } else {
-                    Toast.makeText(context, "サインイン: アカウントを取得できませんでした", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, "❌ アカウント取得失敗（account=null / last=null）", Toast.LENGTH_LONG).show()
                 }
             }
         } catch (e: ApiException) {
             Log.w("SettingsScreen", "ApiException statusCode=${e.statusCode}: ${e.message}")
             when (e.statusCode) {
-                12501 -> { /* ユーザーキャンセル: トースト不要 */ }
+                12501 -> Toast.makeText(context, "サインインをキャンセルしました", Toast.LENGTH_SHORT).show()
                 12502 -> {
-                    // SIGN_IN_CURRENTLY_IN_PROGRESS: すでにサインイン中
-                    // getLastSignedInAccount で現在のアカウントを取得
                     val last = GoogleSignIn.getLastSignedInAccount(context)
                     if (last?.email != null) {
                         viewModel.onGoogleSignInSuccess(last, last.email)
-                        Toast.makeText(context, "Google アカウントに接続しました: ${last.email}", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "✅ 接続済み（進行中フォールバック）: ${last.email}", Toast.LENGTH_LONG).show()
+                    } else {
+                        Toast.makeText(context, "⚠️ サインイン処理中 (code=12502)", Toast.LENGTH_SHORT).show()
                     }
                 }
-                else -> Toast.makeText(context, "サインイン失敗 (code=${e.statusCode}): ${e.message}", Toast.LENGTH_LONG).show()
+                else -> {
+                    Toast.makeText(context, "❌ サインイン失敗 (code=${e.statusCode})\n${e.message ?: "詳細不明"}", Toast.LENGTH_LONG).show()
+                }
             }
         } catch (e: Exception) {
             Log.e("SettingsScreen", "signInLauncher exception: ${e.message}", e)
-            Toast.makeText(context, "サインイン処理エラー: ${e.message}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "❌ サインイン例外: ${e.javaClass.simpleName}: ${e.message ?: "詳細不明"}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -252,17 +259,28 @@ fun SettingsScreen(
                     )
                     Text("Googleドライブのルートにこの名前のフォルダが作成されます", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(8.dp))
+
+                    // テスト中かどうかを判定
+                    val isTesting = driveTestResult != null &&
+                        !driveTestResult!!.startsWith("✅") &&
+                        !driveTestResult!!.startsWith("❌")
+
                     // 接続テストボタン（サインイン済み → 必ず enabled=true）
                     Button(
                         onClick = {
                             viewModel.clearDriveTestResult()
                             viewModel.testDriveConnection(settings.driveFolderName)
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier.fillMaxWidth(),
+                        enabled = !isTesting
                     ) {
-                        Icon(Icons.Filled.NetworkCheck, contentDescription = null)
+                        if (isTesting) {
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                        } else {
+                            Icon(Icons.Filled.NetworkCheck, contentDescription = null)
+                        }
                         Spacer(Modifier.width(8.dp))
-                        Text("接続テスト（テストファイルをアップロード）")
+                        Text(if (isTesting) "テスト実行中..." else "接続テスト（テストファイルをアップロード）")
                     }
                 } else {
                     // 未サインイン
@@ -289,25 +307,51 @@ fun SettingsScreen(
                     }
                 }
 
-                // テスト結果（サインイン済みのとき表示）
+                // テスト結果カード（進捗もリアルタイム表示）
                 driveTestResult?.let { result ->
-                    Spacer(Modifier.height(4.dp))
+                    Spacer(Modifier.height(8.dp))
+                    val isSuccess  = result.startsWith("✅")
+                    val isError    = result.startsWith("❌")
+                    val isProgress = !isSuccess && !isError
+
                     Card(
                         colors = CardDefaults.cardColors(
                             containerColor = when {
-                                result.startsWith("✅") -> MaterialTheme.colorScheme.primaryContainer
-                                result == "テスト中..."  -> MaterialTheme.colorScheme.surfaceVariant
-                                else                    -> MaterialTheme.colorScheme.errorContainer
+                                isSuccess  -> MaterialTheme.colorScheme.primaryContainer
+                                isError    -> MaterialTheme.colorScheme.errorContainer
+                                else       -> MaterialTheme.colorScheme.surfaceVariant
                             }
                         ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            if (result == "テスト中...") {
-                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                                Spacer(Modifier.width(8.dp))
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                when {
+                                    isProgress -> {
+                                        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    isSuccess -> {
+                                        Icon(Icons.Filled.CheckCircle, contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                    isError -> {
+                                        Icon(Icons.Filled.Error, contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(14.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                    }
+                                }
+                                Text(
+                                    text = result,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = when {
+                                        isSuccess  -> MaterialTheme.colorScheme.onPrimaryContainer
+                                        isError    -> MaterialTheme.colorScheme.onErrorContainer
+                                        else       -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    }
+                                )
                             }
-                            Text(result, style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
@@ -353,7 +397,7 @@ fun SettingsScreen(
 
             // ── アプリ情報 ────────────────────────────────────
             SectionCard(title = "アプリ情報") {
-                InfoRow(label = "バージョン", value = "1.3.9")
+                InfoRow(label = "バージョン", value = "1.4.0")
                 InfoRow(label = "ビルドタイプ", value = "DEBUG")
             }
         }
