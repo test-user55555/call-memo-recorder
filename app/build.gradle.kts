@@ -38,8 +38,8 @@ android {
         applicationId = "com.example.callmemorecorder"
         minSdk = 28
         targetSdk = 28
-        versionCode = 15
-        versionName = "1.6.0"
+        versionCode = 16
+        versionName = "1.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

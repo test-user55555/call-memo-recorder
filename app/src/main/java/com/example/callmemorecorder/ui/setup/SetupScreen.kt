@@ -1,6 +1,7 @@
 package com.example.callmemorecorder.ui.setup
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -29,24 +30,29 @@ fun SetupScreen(
     viewModel: SettingsViewModel
 ) {
     val context = LocalContext.current
+    val activity = context as? Activity
     var agreed = remember { mutableStateOf(false) }
 
     fun checkPermission(perm: String) =
         ContextCompat.checkSelfPermission(context, perm) == PackageManager.PERMISSION_GRANTED
 
-    var micGranted by remember {
-        mutableStateOf(checkPermission(Manifest.permission.RECORD_AUDIO))
+    /**
+     * 「永続的に拒否済み」かどうかを判定する。
+     * - shouldShowRequestPermissionRationale == false かつ 未付与 → 永続拒否
+     * - ただし「まだ一度もリクエストしていない」場合も false になる。
+     *   そのため requestedOnce フラグと組み合わせて判断する。
+     */
+    fun isPermanentlyDenied(perm: String, requestedOnce: Boolean): Boolean {
+        if (checkPermission(perm)) return false
+        if (!requestedOnce) return false
+        // requestedOnce == true かつ付与されておらず rationale も不要 → 永続拒否
+        return activity?.shouldShowRequestPermissionRationale(perm) == false
     }
-    var contactsGranted by remember {
-        mutableStateOf(checkPermission(Manifest.permission.READ_CONTACTS))
-    }
-    var callLogGranted by remember {
-        mutableStateOf(checkPermission(Manifest.permission.READ_CALL_LOG))
-    }
-    var phoneGranted by remember {
-        mutableStateOf(checkPermission(Manifest.permission.READ_PHONE_STATE))
-    }
-    // 通知権限: API 33+ のみ必要、それ未満は常に true
+
+    var micGranted by remember { mutableStateOf(checkPermission(Manifest.permission.RECORD_AUDIO)) }
+    var contactsGranted by remember { mutableStateOf(checkPermission(Manifest.permission.READ_CONTACTS)) }
+    var callLogGranted by remember { mutableStateOf(checkPermission(Manifest.permission.READ_CALL_LOG)) }
+    var phoneGranted by remember { mutableStateOf(checkPermission(Manifest.permission.READ_PHONE_STATE)) }
     var notifGranted by remember {
         mutableStateOf(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
@@ -55,43 +61,51 @@ fun SetupScreen(
         )
     }
 
-    // 各権限が「一度拒否されたことがあるか」のフラグ
-    // (shouldShowRationale が false かつ未付与 = 「二度と表示しない」を選択済み)
-    // SetupScreen は Activity コンテキストを必要とするため、ここでは
-    // ランチャーが refused を返した場合にフォールバックするシンプルな方式を採用する
+    // 各権限のリクエスト済みフラグ（「まだ一度も聞いていない」状態を区別するため）
+    var micRequested      by remember { mutableStateOf(false) }
+    var phoneRequested    by remember { mutableStateOf(false) }
+    var contactsRequested by remember { mutableStateOf(false) }
+    var callLogRequested  by remember { mutableStateOf(false) }
+    var notifRequested    by remember { mutableStateOf(false) }
+
+    // 永続拒否フラグ（リクエスト結果後に更新）
+    var micDeniedPermanently      by remember { mutableStateOf(false) }
+    var phoneDeniedPermanently    by remember { mutableStateOf(false) }
+    var contactsDeniedPermanently by remember { mutableStateOf(false) }
+    var callLogDeniedPermanently  by remember { mutableStateOf(false) }
     var notifDeniedPermanently    by remember { mutableStateOf(false) }
-    var micDeniedPermanently       by remember { mutableStateOf(false) }
-    var phoneDeniedPermanently     by remember { mutableStateOf(false) }
-    var contactsDeniedPermanently  by remember { mutableStateOf(false) }
-    var callLogDeniedPermanently   by remember { mutableStateOf(false) }
 
     // ── ランチャーはすべてトップレベルで宣言（Compose の規則） ──────────────
     val micLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         micGranted = granted
-        if (!granted) micDeniedPermanently = true
+        micRequested = true
+        micDeniedPermanently = isPermanentlyDenied(Manifest.permission.RECORD_AUDIO, true)
     }
 
     val contactsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         contactsGranted = granted
-        if (!granted) contactsDeniedPermanently = true
+        contactsRequested = true
+        contactsDeniedPermanently = isPermanentlyDenied(Manifest.permission.READ_CONTACTS, true)
     }
 
     val callLogLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         callLogGranted = granted
-        if (!granted) callLogDeniedPermanently = true
+        callLogRequested = true
+        callLogDeniedPermanently = isPermanentlyDenied(Manifest.permission.READ_CALL_LOG, true)
     }
 
     val phoneLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         phoneGranted = granted
-        if (!granted) phoneDeniedPermanently = true
+        phoneRequested = true
+        phoneDeniedPermanently = isPermanentlyDenied(Manifest.permission.READ_PHONE_STATE, true)
     }
 
     // POST_NOTIFICATIONS ランチャーは API に関わらずトップレベルで宣言する。
@@ -100,10 +114,13 @@ fun SetupScreen(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         notifGranted = granted
-        if (!granted) notifDeniedPermanently = true
+        notifRequested = true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            notifDeniedPermanently = isPermanentlyDenied(Manifest.permission.POST_NOTIFICATIONS, true)
+        }
     }
 
-    // アプリ設定画面を開くランチャー（「二度と表示しない」選択後のフォールバック用）
+    // アプリ設定画面を開くランチャー（永続拒否後のフォールバック用）
     val appSettingsLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) {
@@ -114,12 +131,12 @@ fun SetupScreen(
         notifGranted    = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
             checkPermission(Manifest.permission.POST_NOTIFICATIONS) else true
         callLogGranted  = checkPermission(Manifest.permission.READ_CALL_LOG)
-        // 設定から戻ったらフラグをリセット（再試行できるようにする）
-        if (micGranted)      micDeniedPermanently      = false
-        if (phoneGranted)    phoneDeniedPermanently    = false
-        if (contactsGranted) contactsDeniedPermanently = false
-        if (notifGranted)    notifDeniedPermanently    = false
-        if (callLogGranted)  callLogDeniedPermanently  = false
+        // 設定から戻ったら永続拒否フラグをリセット（再度ダイアログが出るようになる場合がある）
+        if (micGranted)      { micDeniedPermanently = false; micRequested = false }
+        if (phoneGranted)    { phoneDeniedPermanently = false; phoneRequested = false }
+        if (contactsGranted) { contactsDeniedPermanently = false; contactsRequested = false }
+        if (notifGranted)    { notifDeniedPermanently = false; notifRequested = false }
+        if (callLogGranted)  { callLogDeniedPermanently = false; callLogRequested = false }
     }
 
     fun openAppSettings() {
@@ -251,7 +268,19 @@ fun SetupScreen(
                         isRequired = false,
                         isDeniedPermanently = notifDeniedPermanently,
                         onRequest = {
-                            notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            // shouldShowRequestPermissionRationale が false かつ
+                            // リクエスト済み = 永続拒否 → 設定画面へ誘導
+                            val canShowDialog = activity?.shouldShowRequestPermissionRationale(
+                                Manifest.permission.POST_NOTIFICATIONS
+                            ) ?: false
+                            if (!notifRequested || canShowDialog) {
+                                // まだリクエストしていないか、rationale を表示すべき状態
+                                notifLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            } else {
+                                // 永続拒否済み → 設定画面へ
+                                notifDeniedPermanently = true
+                                openAppSettings()
+                            }
                         },
                         onOpenSettings = ::openAppSettings
                     )

@@ -551,51 +551,106 @@ private fun RecordItemCard(
 
                     Column(modifier = Modifier.weight(1f)) {
                         // ── 相手の名前（連絡先名 or「不明」）──────────────────────────
-                        val displayName = record.callerName
-                            ?: if (record.callerNumber != null) null else "不明"
-                        val dirLabel = when (record.callDirection) {
+                        val hasName   = !record.callerName.isNullOrBlank()
+                        val hasNumber = !record.callerNumber.isNullOrBlank()
+                        val dirLabel  = when (record.callDirection) {
                             CallDirection.INCOMING -> "着信"
                             CallDirection.OUTGOING -> "発信"
                             CallDirection.UNKNOWN  -> "録音"
                         }
 
-                        // 行1: [発着信アイコン] 名前 (or 番号のみの場合は番号)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = dirLabel,
-                                style = MaterialTheme.typography.labelSmall,
+                        // 行1: 発着信ラベル + 名前（名前がなければ番号、どちらもなければ「不明」）
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            // 発着信ラベルチップ
+                            Surface(
+                                shape = MaterialTheme.shapes.extraSmall,
                                 color = when (record.callDirection) {
-                                    CallDirection.INCOMING -> MaterialTheme.colorScheme.primary
-                                    CallDirection.OUTGOING -> MaterialTheme.colorScheme.tertiary
-                                    CallDirection.UNKNOWN  -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    CallDirection.INCOMING -> MaterialTheme.colorScheme.primaryContainer
+                                    CallDirection.OUTGOING -> MaterialTheme.colorScheme.tertiaryContainer
+                                    CallDirection.UNKNOWN  -> MaterialTheme.colorScheme.surfaceVariant
                                 },
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier
-                                    .padding(end = 6.dp)
-                            )
+                                modifier = Modifier.padding(end = 6.dp)
+                            ) {
+                                Text(
+                                    text = dirLabel,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = when (record.callDirection) {
+                                        CallDirection.INCOMING -> MaterialTheme.colorScheme.onPrimaryContainer
+                                        CallDirection.OUTGOING -> MaterialTheme.colorScheme.onTertiaryContainer
+                                        CallDirection.UNKNOWN  -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
                             Text(
-                                text = displayName ?: record.callerNumber ?: record.title.ifBlank { "不明" },
+                                text = when {
+                                    hasName   -> record.callerName!!
+                                    hasNumber -> record.callerNumber!!
+                                    else      -> "不明"
+                                },
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                maxLines = 1
+                                maxLines = 1,
+                                modifier = Modifier.weight(1f)
                             )
                         }
 
-                        // 行2: 電話番号（名前がある場合のみ表示）
-                        if (displayName != null && record.callerNumber != null) {
+                        // 行2: 電話番号（名前がある場合のみ表示、または番号のみの場合でも表示）
+                        if (hasNumber) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(top = 2.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Phone,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(12.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.width(3.dp))
+                                Text(
+                                    text = record.callerNumber!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        // 行3: 日時 + 録音時間
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(top = 2.dp)
+                        ) {
+                            Icon(
+                                Icons.Filled.Schedule,
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.width(3.dp))
                             Text(
-                                text = record.callerNumber,
+                                text = formatDatetime(record.createdAt),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Icon(
+                                Icons.Filled.Timer,
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.width(3.dp))
+                            Text(
+                                text = formatDuration(record.durationMs),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-
-                        // 行3: 日時 + 録音時間
-                        Text(
-                            text = "${formatDatetime(record.createdAt)}  ${formatDuration(record.durationMs)}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
 
                     if (!isSelectionMode) {
