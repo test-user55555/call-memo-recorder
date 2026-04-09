@@ -295,9 +295,9 @@ class CallMonitorService : Service() {
             val result = stopRecording()
             updateNotification("通話を監視中")
             if (result is RecordingResult.Success) {
-                // API 31+ で番号が取得できなかった場合は通話ログから補完（短い遅延後）
+                // API 31+ で番号が取得できなかった場合は通話ログから補完（遅延後）
                 val finalNumber = if (snapshotNumber.isNullOrEmpty()) {
-                    delay(2000L)   // 通話ログに記録されるまで少し待つ
+                    delay(5000L)   // 通話ログに記録されるまで待つ（2秒→5秒に延長）
                     resolveNumberFromCallLog(snapshotDirection).also { resolved ->
                         if (resolved != null) Log.i(TAG, "Phone number resolved from call log: $resolved")
                     }
@@ -538,7 +538,7 @@ class CallMonitorService : Service() {
             // ── ファイルを正式名にリネーム ──────────────────────────────────
             val now = System.currentTimeMillis()
             val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date(now))
-            val newFileName = buildFileName(timestamp, direction, name, number)
+            val newFileName = buildFileName(timestamp, direction, name, number, durationMs)
             val originalFile = File(filePath)
             val renamedFile = File(originalFile.parent ?: filesDir.absolutePath, newFileName)
             val finalPath = if (originalFile.renameTo(renamedFile)) {
@@ -600,24 +600,30 @@ class CallMonitorService : Service() {
 
     /**
      * 正式ファイル名を生成する。
-     * 形式: yyyyMMdd-HHmmss_発着_名前_番号.m4a
+     * 形式: yyyyMMdd-HHmmss_発着_名前_番号_T[分].m4a
      *   - 着信: 「着」、発信: 「発」、不明: 「通話」
-     *   - 名前が取得できない場合: 「不明」
-     *   - 番号が取得できない場合: 番号部分を省略（名前_のみ）
+     *   - 名前が取得できない場合: 「-」
+     *   - 番号が取得できない場合: 番号部分を省略
+     *   - 録音時間: 分単位で切り上げ（例: 1分20秒→T2, 1時間半→T90）
      *   - ファイル名に使えない文字（/ \ : * ? " < > | 空白等）はアンダースコアに置換
      */
-    private fun buildFileName(timestamp: String, direction: String, name: String?, number: String?): String {
+    private fun buildFileName(timestamp: String, direction: String, name: String?, number: String?, durationMs: Long): String {
         val dirLabel = when (direction) {
             "INCOMING" -> "着"
             "OUTGOING" -> "発"
             else       -> "通話"
         }
-        val safeName   = (name   ?: "不明").replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
+        val safeName   = (name ?: "-").replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
         val safeNumber = number?.replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
+        
+        // 録音時間を分単位で切り上げ（例: 80秒→2分, 90秒→2分）
+        val durationMinutes = ((durationMs / 1000.0) / 60.0).let { kotlin.math.ceil(it).toInt() }
+        val timeLabel = "T${durationMinutes}"
+        
         return if (safeNumber != null) {
-            "${timestamp}_${dirLabel}_${safeName}_${safeNumber}.m4a"
+            "${timestamp}_${dirLabel}_${safeName}_${safeNumber}_${timeLabel}.m4a"
         } else {
-            "${timestamp}_${dirLabel}_${safeName}.m4a"
+            "${timestamp}_${dirLabel}_${safeName}_${timeLabel}.m4a"
         }
     }
 

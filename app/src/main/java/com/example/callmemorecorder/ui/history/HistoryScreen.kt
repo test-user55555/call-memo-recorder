@@ -550,7 +550,7 @@ private fun RecordItemCard(
                     Spacer(Modifier.width(8.dp))
 
                     Column(modifier = Modifier.weight(1f)) {
-                        // ── 相手の名前（連絡先名 or「不明」）──────────────────────────
+                        // ── 相手の名前（連絡先名 or「-」）──────────────────────────
                         val hasName   = !record.callerName.isNullOrBlank()
                         val hasNumber = !record.callerNumber.isNullOrBlank()
                         val dirLabel  = when (record.callDirection) {
@@ -559,7 +559,7 @@ private fun RecordItemCard(
                             CallDirection.UNKNOWN  -> "手動"  // 手動録音として表示
                         }
 
-                        // 行1: 発着信ラベル + 名前（名前がなければ番号、どちらもなければ「不明」）
+                        // 行1: 発着信ラベル + 名前（名前がなければ番号、どちらもなければ「-」）
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
@@ -590,7 +590,7 @@ private fun RecordItemCard(
                                 text = when {
                                     hasName   -> record.callerName!!
                                     hasNumber -> record.callerNumber!!
-                                    else      -> "不明"
+                                    else      -> "-"
                                 },
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
