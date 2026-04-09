@@ -168,7 +168,7 @@ class HomeViewModel(
                 
                 // 録音時間を分単位で切り上げ（例: 80秒→2分, 90秒→2分）
                 val durationMinutes = kotlin.math.ceil((durationMs / 1000.0) / 60.0).toInt()
-                val newFileName = "${timestamp}_手動_-_T${durationMinutes}.m4a"  // 手動録音: 名前は「-」
+                val newFileName = "${timestamp}_手動_-_-_T${durationMinutes}.m4a"  // 手動録音: 名前・番号とも「-」
                 
                 val originalFile = File(filePath)
                 val renamedFile = File(originalFile.parent ?: context.filesDir.absolutePath, newFileName)
