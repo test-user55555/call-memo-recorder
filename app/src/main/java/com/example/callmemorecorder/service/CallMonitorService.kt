@@ -89,6 +89,7 @@ class CallMonitorService : Service() {
     private var currentPhoneNumber: String? = null
     private var currentCallerName: String? = null
     private var callDirection: String = "UNKNOWN"
+    private var callStartTime: Long = 0L  // 通話開始時刻（通話ログ検索の基準時刻）
 
     // ── AudioManager ──────────────────────────────────────────
     private lateinit var audioManager: AudioManager
@@ -244,6 +245,10 @@ class CallMonitorService : Service() {
             current == TelephonyManager.CALL_STATE_RINGING &&
                     prev == TelephonyManager.CALL_STATE_IDLE -> {
                 callDirection = "INCOMING"
+                // API 31+ では phoneNumber が渡されないため TelephonyManager から直接取得を試みる
+                if (phoneNumber.isNullOrEmpty() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    tryGetIncomingNumberFromTelephony()
+                }
                 Log.i(TAG, "Incoming call from ${currentPhoneNumber ?: "unknown"}")
             }
 
@@ -253,9 +258,9 @@ class CallMonitorService : Service() {
                 if (prev == TelephonyManager.CALL_STATE_IDLE) {
                     callDirection = "OUTGOING"
                     // 発信の場合、API 31+ では番号が取得できないことが多い
-                    // getLine1Number は自分の番号なので発信先は取れない
                     Log.d(TAG, "Outgoing call - number may be unknown on API 31+")
                 }
+                callStartTime = System.currentTimeMillis()  // 通話開始時刻を記録
                 Log.i(TAG, "Call started: dir=$callDirection, num=${currentPhoneNumber ?: "unknown"}")
                 onCallStarted()
             }
@@ -268,6 +273,7 @@ class CallMonitorService : Service() {
                 currentPhoneNumber = null
                 currentCallerName = null
                 callDirection = "UNKNOWN"
+                callStartTime = 0L
             }
         }
     }
@@ -286,10 +292,11 @@ class CallMonitorService : Service() {
     // ── 通話終了 ─────────────────────────────────────────────
 
     private fun onCallEnded() {
-        // 通話終了時点の番号・名前・方向をスナップショットとして保存
+        // 通話終了時点の番号・名前・方向・開始時刻をスナップショットとして保存
         val snapshotNumber    = currentPhoneNumber
         val snapshotName      = currentCallerName
         val snapshotDirection = callDirection
+        val snapshotStartTime = callStartTime
 
         serviceScope.launch {
             val result = stopRecording()
@@ -297,9 +304,10 @@ class CallMonitorService : Service() {
             if (result is RecordingResult.Success) {
                 // API 31+ で番号が取得できなかった場合は通話ログから補完（遅延後）
                 val finalNumber = if (snapshotNumber.isNullOrEmpty()) {
-                    delay(5000L)   // 通話ログに記録されるまで待つ（2秒→5秒に延長）
-                    resolveNumberFromCallLog(snapshotDirection).also { resolved ->
+                    delay(5000L)   // 通話ログに記録されるまで待つ
+                    resolveNumberFromCallLog(snapshotDirection, snapshotStartTime).also { resolved ->
                         if (resolved != null) Log.i(TAG, "Phone number resolved from call log: $resolved")
+                        else Log.w(TAG, "Phone number could not be resolved from call log")
                     }
                 } else {
                     snapshotNumber
@@ -601,11 +609,16 @@ class CallMonitorService : Service() {
     /**
      * 正式ファイル名を生成する。
      * 形式: yyyyMMdd-HHmmss_発着_名前_番号_T[分].m4a
-     *   - 着信: 「着」、発信: 「発」、不明: 「通話」
+     *   - 着信: 「着」、発信: 「発」、不明/手動: 「通話」
      *   - 名前が取得できない場合: 「-」
-     *   - 番号が取得できない場合: 番号部分を省略
+     *   - 番号が取得できない場合: 「-」（省略しない）
      *   - 録音時間: 分単位で切り上げ（例: 1分20秒→T2, 1時間半→T90）
      *   - ファイル名に使えない文字（/ \ : * ? " < > | 空白等）はアンダースコアに置換
+     *
+     * 例:
+     *   20260410-082858_着_山田太郎_09012345678_T2.m4a  （名前あり・番号あり）
+     *   20260410-082858_着_-_09012345678_T2.m4a          （名前なし・番号あり）
+     *   20260410-082858_着_-_-_T2.m4a                    （名前なし・番号なし）
      */
     private fun buildFileName(timestamp: String, direction: String, name: String?, number: String?, durationMs: Long): String {
         val dirLabel = when (direction) {
@@ -613,29 +626,67 @@ class CallMonitorService : Service() {
             "OUTGOING" -> "発"
             else       -> "通話"
         }
-        val safeName   = (name ?: "-").replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
-        val safeNumber = number?.replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
+        val safeName   = (name?.takeIf { it.isNotBlank() } ?: "-")
+            .replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
+        // 番号が取れない場合も "-" で明示的にフィールドを埋める
+        val safeNumber = (number?.takeIf { it.isNotBlank() && it != "-1" } ?: "-")
+            .replace(Regex("[/\\\\:*?\"<>|\\s]"), "_")
         
-        // 録音時間を分単位で切り上げ（例: 80秒→2分, 90秒→2分）
+        // 録音時間を分単位で切り上げ（例: 80秒→2分, 30秒→1分, 0秒→0分）
         val durationMinutes = ((durationMs / 1000.0) / 60.0).let { kotlin.math.ceil(it).toInt() }
         val timeLabel = "T${durationMinutes}"
         
-        return if (safeNumber != null) {
-            "${timestamp}_${dirLabel}_${safeName}_${safeNumber}_${timeLabel}.m4a"
-        } else {
-            "${timestamp}_${dirLabel}_${safeName}_${timeLabel}.m4a"
+        return "${timestamp}_${dirLabel}_${safeName}_${safeNumber}_${timeLabel}.m4a"
+    }
+
+    // ── API 31+ 着信番号の直接取得試行 ──────────────────────────
+
+    /**
+     * API 31+ で RINGING 状態時に TelephonyManager から着信番号の取得を試みる。
+     * Android 12+ では READ_CALL_LOG 権限があれば getLine1Number 以外の方法も使用可能。
+     * ※ セキュリティ上、一般アプリへの着信番号提供は制限されているため、
+     *    取得できない場合は通話ログフォールバックで補完する。
+     */
+    @SuppressLint("MissingPermission")
+    private fun tryGetIncomingNumberFromTelephony() {
+        try {
+            // Android 5.1+ : EXTRA_INCOMING_NUMBER は API 29 で deprecated になったが
+            // BroadcastReceiver 経由では取得可能な場合がある（CallStateReceiver で対応）
+            // ここでは READ_CALL_LOG 権限がある場合に限り通話ログから即時取得を試みる
+            if (hasReadCallLogPermission()) {
+                // 直前の着信ログを取得（まだ通話中なので DATE は今に近い）
+                contentResolver.query(
+                    CallLog.Calls.CONTENT_URI,
+                    arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.DATE, CallLog.Calls.TYPE),
+                    "${CallLog.Calls.TYPE} = ? AND ${CallLog.Calls.DATE} >= ?",
+                    arrayOf(CallLog.Calls.INCOMING_TYPE.toString(),
+                        (System.currentTimeMillis() - 30_000L).toString()),
+                    "${CallLog.Calls.DATE} DESC"
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val num = cursor.getString(cursor.getColumnIndexOrThrow(CallLog.Calls.NUMBER))
+                        if (!num.isNullOrBlank() && num != "-1") {
+                            currentPhoneNumber = num
+                            currentCallerName = resolveContactName(num)
+                            Log.i(TAG, "Incoming number from call log (RINGING): $num")
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "tryGetIncomingNumberFromTelephony failed: ${e.message}")
         }
     }
 
-    // ── 通話ログから最新の番号を取得（API 31+ で TelephonyCallback に番号が渡されない場合の補完） ─────
+    // ── 通話ログから番号を取得（API 31+ で TelephonyCallback に番号が渡されない場合の補完） ─────
 
     /**
-     * 通話終了直後に通話ログから最新エントリの番号を取得する。
+     * 通話終了直後に通話ログから該当通話の番号を取得する。
      * READ_CALL_LOG 権限が必要。
      * @param direction "INCOMING" or "OUTGOING"
-     * @param withinMs この時間（ms）以内の通話のみ対象（デフォルト60秒）
+     * @param callStartTime 通話開始時刻（ms）。0の場合は直近120秒以内を検索
      */
-    private fun resolveNumberFromCallLog(direction: String, withinMs: Long = 60_000L): String? {
+    private fun resolveNumberFromCallLog(direction: String, callStartTime: Long = 0L): String? {
         if (!hasReadCallLogPermission()) {
             Log.d(TAG, "READ_CALL_LOG permission not granted")
             return null
@@ -646,7 +697,12 @@ class CallMonitorService : Service() {
                 "OUTGOING" -> CallLog.Calls.OUTGOING_TYPE
                 else       -> null
             }
-            val cutoff = System.currentTimeMillis() - withinMs
+            // 通話開始時刻の30秒前から現在までを検索（ログ記録タイムスタンプのズレを考慮）
+            val cutoff = if (callStartTime > 0L) {
+                callStartTime - 30_000L
+            } else {
+                System.currentTimeMillis() - 120_000L
+            }
             val selection = buildString {
                 append("${CallLog.Calls.DATE} >= ?")
                 if (callType != null) append(" AND ${CallLog.Calls.TYPE} = ?")
@@ -669,7 +725,7 @@ class CallMonitorService : Service() {
                     Log.d(TAG, "Resolved from call log: $number (dir=$direction)")
                     number.takeIf { it.isNotBlank() && it != "-1" }
                 } else {
-                    Log.d(TAG, "No call log entry found within ${withinMs}ms (dir=$direction)")
+                    Log.d(TAG, "No call log entry found (dir=$direction, cutoff=$cutoff)")
                     null
                 }
             }

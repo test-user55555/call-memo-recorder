@@ -553,13 +553,14 @@ private fun RecordItemCard(
                         // ── 相手の名前（連絡先名 or「-」）──────────────────────────
                         val hasName   = !record.callerName.isNullOrBlank()
                         val hasNumber = !record.callerNumber.isNullOrBlank()
+                        val isManual  = record.callDirection == CallDirection.UNKNOWN
                         val dirLabel  = when (record.callDirection) {
                             CallDirection.INCOMING -> "着信"
                             CallDirection.OUTGOING -> "発信"
                             CallDirection.UNKNOWN  -> "手動"  // 手動録音として表示
                         }
 
-                        // 行1: 発着信ラベル + 名前（名前がなければ番号、どちらもなければ「-」）
+                        // 行1: 発着信ラベル + 名前（名前がなければ番号、どちらもなければ「-」、手動は名前なし）
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth()
@@ -586,21 +587,24 @@ private fun RecordItemCard(
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
                             }
-                            Text(
-                                text = when {
-                                    hasName   -> record.callerName!!
-                                    hasNumber -> record.callerNumber!!
-                                    else      -> "-"
-                                },
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                modifier = Modifier.weight(1f)
-                            )
+                            // 手動録音は名前・番号を表示しない
+                            if (!isManual) {
+                                Text(
+                                    text = when {
+                                        hasName   -> record.callerName!!
+                                        hasNumber -> record.callerNumber!!
+                                        else      -> "-"
+                                    },
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
                         }
 
-                        // 行2: 電話番号（名前がある場合のみ表示、または番号のみの場合でも表示）
-                        if (hasNumber) {
+                        // 行2: 電話番号（手動録音は表示しない）
+                        if (!isManual && hasNumber) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
                                 modifier = Modifier.padding(top = 2.dp)
@@ -781,7 +785,7 @@ private fun CallDirectionIcon(direction: CallDirection) {
     val (icon, tint, label) = when (direction) {
         CallDirection.INCOMING -> Triple(Icons.Filled.CallReceived, Color(0xFF2196F3), "着信")
         CallDirection.OUTGOING -> Triple(Icons.Filled.CallMade,     Color(0xFF4CAF50), "発信")
-        CallDirection.UNKNOWN  -> Triple(Icons.Filled.Mic, MaterialTheme.colorScheme.onSurfaceVariant, "録音")
+        CallDirection.UNKNOWN  -> Triple(Icons.Filled.Mic, MaterialTheme.colorScheme.onSurfaceVariant, "手動")
     }
     Icon(
         imageVector = icon,

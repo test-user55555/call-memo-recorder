@@ -166,9 +166,9 @@ class HomeViewModel(
                 val timestamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.getDefault())
                     .format(java.util.Date(now))
                 
-                // 録音時間を分単位で切り上げ（例: 80秒→2分, 90秒→2分）
-                val durationMinutes = kotlin.math.ceil((durationMs / 1000.0) / 60.0).toInt()
-                val newFileName = "${timestamp}_手動_-_-_T${durationMinutes}.m4a"  // 手動録音: 名前・番号とも「-」
+                // 手動録音ファイル名: yyyyMMdd-HHmmss_手動.m4a（名前・番号フィールドなし）
+                // 例: 20260408-181912_手動.m4a
+                val newFileName = "${timestamp}_手動.m4a"
                 
                 val originalFile = File(filePath)
                 val renamedFile = File(originalFile.parent ?: context.filesDir.absolutePath, newFileName)
